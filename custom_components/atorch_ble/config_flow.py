@@ -252,12 +252,17 @@ class AtorchBleOptionsFlow(OptionsFlow):
                 interval_default = current.get(
                     CONF_POLL_INTERVAL_SECONDS, DEFAULT_POLL_INTERVAL_SECONDS
                 )
+            # NOTE: the NumberSelector's min/max bounds are intentionally
+            # omitted here so out-of-range submissions reach the step
+            # handler and surface as a translatable
+            # ``interval_out_of_range`` field error rather than a
+            # generic schema-validation rejection. The bounds are still
+            # enforced in ``async_step_init`` against
+            # ``MIN_POLL_INTERVAL_SECONDS``/``MAX_POLL_INTERVAL_SECONDS``.
             fields[
                 vol.Required(CONF_POLL_INTERVAL_SECONDS, default=interval_default)
             ] = NumberSelector(
                 NumberSelectorConfig(
-                    min=MIN_POLL_INTERVAL_SECONDS,
-                    max=MAX_POLL_INTERVAL_SECONDS,
                     step=1,
                     unit_of_measurement="seconds",
                     mode=NumberSelectorMode.BOX,
