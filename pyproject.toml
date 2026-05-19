@@ -21,6 +21,13 @@ dev = [
     "pytest-cov",
     "ruff",
     "mypy",
+    # Transitive deps pulled in by homeassistant.components.bluetooth ->
+    # homeassistant.components.usb at import time but not declared as
+    # hard requirements of the `homeassistant` PyPI package.
+    "pyserial>=3.5",
+    "pyserial-asyncio-fast>=0.11",
+    "aioesphomeapi>=24",
+    "aiousbwatcher>=1.1.1",
 ]
 
 [project.urls]

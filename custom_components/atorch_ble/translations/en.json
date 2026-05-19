@@ -42,44 +42,34 @@
   "entity": {
     "sensor": {
       "voltage": {
-        "name": "Voltage",
-        "description": "Live voltage reading from the meter."
+        "name": "Voltage"
       },
       "current": {
-        "name": "Current",
-        "description": "Live current reading from the meter."
+        "name": "Current"
       },
       "power": {
-        "name": "Power",
-        "description": "Live power, computed from voltage × current."
+        "name": "Power"
       },
       "energy": {
-        "name": "Energy",
-        "description": "Cumulative energy measured since the meter's internal counter was last reset. The J7-C does not allow this counter to be reset over Bluetooth — it can only be reset on the device's physical screen (long-press the rotary button while the energy screen is showing). Eligible for the Home Assistant Energy Dashboard."
+        "name": "Energy"
       },
       "capacity": {
-        "name": "Capacity",
-        "description": "Cumulative charge in mAh since the meter's internal counter was last reset. Like energy, this counter is not resettable over Bluetooth (use the device's physical screen). Reported in mAh; this metric is not eligible for the Energy Dashboard — use the Energy (Wh) sensor for energy-dashboard tracking."
+        "name": "Capacity"
       },
       "voltage_dplus": {
-        "name": "USB D+ voltage",
-        "description": "USB D+ data-line voltage. Useful for diagnosing USB-PD negotiation; not relevant to most users."
+        "name": "USB D+ voltage"
       },
       "voltage_dminus": {
-        "name": "USB D− voltage",
-        "description": "USB D− data-line voltage. Useful for diagnosing USB-PD negotiation; not relevant to most users."
+        "name": "USB D− voltage"
       },
       "temperature": {
-        "name": "Temperature",
-        "description": "Meter internal temperature."
+        "name": "Temperature"
       },
       "runtime": {
-        "name": "Runtime",
-        "description": "How long the meter has been running since its internal counter was last reset. Not resettable over Bluetooth."
+        "name": "Runtime"
       },
       "connection_state": {
         "name": "Connection state",
-        "description": "Current BLE connection state. Useful for troubleshooting when sensors show 'Unknown' but no repair issue has been raised. Disabled by default; enable from the device page if needed.",
         "state": {
           "connected": "Connected (persistent mode)",
           "polling": "Connected (polled mode)",
