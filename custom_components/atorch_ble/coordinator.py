@@ -87,6 +87,8 @@ from bleak_retry_connector import (
 
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import (
+    BluetoothCallbackMatcher,
+    BluetoothChange,
     BluetoothScanningMode,
     BluetoothServiceInfoBleak,
 )
@@ -104,6 +106,7 @@ from homeassistant.loader import async_get_integration
 
 from .const import (
     ACK_UNSUPPORTED_KEY,
+    ADVERTISEMENT_WAIT_TIMEOUT_SECONDS,
     CHARACTERISTIC_UUID,
     CONF_CONNECTION_MODE,
     CONF_POLL_INTERVAL_SECONDS,
@@ -574,7 +577,7 @@ class AtorchBleCoordinator(
             return
 
     async def _connect_and_subscribe_persistent(self) -> None:  # pragma: no cover - requires real bleak loop; covered by smoke test
-        ble_device = self._resolve_ble_device()
+        ble_device = await self._wait_for_fresh_advertisement()
         client = await establish_connection(
             BleakClientWithServiceCache,
             ble_device,
@@ -617,7 +620,7 @@ class AtorchBleCoordinator(
 
                 client: BleakClient | None = None
                 try:
-                    ble_device = self._resolve_ble_device()
+                    ble_device = await self._wait_for_fresh_advertisement()
                     client = await establish_connection(
                         BleakClientWithServiceCache,
                         ble_device,
@@ -670,19 +673,100 @@ class AtorchBleCoordinator(
     # BLE device resolution
     # ------------------------------------------------------------------
 
-    def _resolve_ble_device(self) -> BLEDevice:
-        """Resolve the BLEDevice handle from the HA bluetooth registry.
+    def _resolve_ble_device(self) -> BLEDevice | None:
+        """Synchronous "right now" lookup against HA's bluetooth registry.
 
-        Raises ``BleakError`` if the device hasn't been seen recently —
-        that's transient and caller treats it as a connect failure.
+        Returns ``None`` if the device hasn't been seen by a connectable
+        scanner within HA's freshness window. Callers that can afford to
+        wait should prefer :meth:`_wait_for_fresh_advertisement`, which
+        is advertisement-driven rather than timer-driven and so does not
+        miss meters whose firmware advertises only every few minutes
+        when idle.
         """
         address = self.entry.data[CONF_ADDRESS]
+        return bluetooth.async_ble_device_from_address(
+            self.hass, address, connectable=True
+        )
+
+    async def _wait_for_fresh_advertisement(self) -> BLEDevice:
+        """Return a connectable :class:`BLEDevice` once one is in registry.
+
+        Two-phase resolution:
+
+        1. **Fast path** — direct lookup via
+           :func:`bluetooth.async_ble_device_from_address`. If a
+           connectable scanner has seen the meter within HA's freshness
+           window, return immediately. This is the common case in
+           production (meter advertising continuously) and in tests
+           (registry pre-populated with a fake BLEDevice).
+        2. **Slow path** — register a bluetooth callback scoped to the
+           meter's address (connectable scanners, active scanning mode)
+           and ``await`` an :class:`asyncio.Event` that the callback
+           sets when an advertisement arrives. After the event fires,
+           re-resolve via the same direct lookup.
+
+        Raises :class:`BleakError` on timeout
+        (``ADVERTISEMENT_WAIT_TIMEOUT_SECONDS``) so the outer reconnect
+        backoff treats this as an ordinary connect failure.
+
+        This replaces the original timer-driven retry loop that polled
+        ``async_ble_device_from_address`` on a fixed cadence: meters
+        that advertise every several minutes when idle would never
+        intersect the ~90 s connectable-registry freshness window, so
+        every retry returned ``None`` and the integration accumulated
+        hundreds of failed attempts without ever connecting.
+        """
+        address = self.entry.data[CONF_ADDRESS]
+
+        # Fast path.
+        ble_device = bluetooth.async_ble_device_from_address(
+            self.hass, address, connectable=True
+        )
+        if ble_device is not None:
+            return ble_device
+
+        # Slow path: arm callback before we await so we cannot miss an
+        # advertisement that lands between the failed fast-path lookup
+        # and the registration.
+        arrived = asyncio.Event()
+
+        @callback
+        def _on_advertisement(
+            _service_info: BluetoothServiceInfoBleak,
+            _change: BluetoothChange,
+        ) -> None:
+            arrived.set()
+
+        cancel = bluetooth.async_register_callback(
+            self.hass,
+            _on_advertisement,
+            BluetoothCallbackMatcher(address=address, connectable=True),
+            BluetoothScanningMode.ACTIVE,
+        )
+        try:
+            try:
+                await asyncio.wait_for(
+                    arrived.wait(),
+                    timeout=ADVERTISEMENT_WAIT_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError as exc:
+                raise BleakError(
+                    f"No advertisement from {address} within "
+                    f"{ADVERTISEMENT_WAIT_TIMEOUT_SECONDS}s; meter unreachable"
+                ) from exc
+        finally:
+            cancel()
+
         ble_device = bluetooth.async_ble_device_from_address(
             self.hass, address, connectable=True
         )
         if ble_device is None:
+            # Advertisement was observed but the registry didn't catch
+            # up — very unlikely race but worth surfacing as a connect
+            # failure for the outer backoff.
             raise BleakError(
-                f"BLEDevice for {address} not currently in HA bluetooth registry"
+                f"Advertisement observed for {address} but BLEDevice "
+                f"still missing from HA bluetooth registry"
             )
         return ble_device
 

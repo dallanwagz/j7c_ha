@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from atorch_ble import UsbMeterReading
 from bleak import BleakError
+from bleak.backends.device import BLEDevice
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
@@ -539,17 +540,99 @@ async def test_expected_cadence_persistent_is_one_second(
     assert coordinator.expected_cadence_seconds == 1
 
 
-async def test_resolve_ble_device_missing_raises(
+async def test_resolve_ble_device_missing_returns_none(
     hass: HomeAssistant,
 ) -> None:
-    """When HA's bluetooth manager has no entry, _resolve_ble_device raises."""
+    """When HA's bluetooth manager has no entry, the sync helper returns None.
+
+    The synchronous ``_resolve_ble_device`` is the "right now" lookup —
+    miss is signalled by ``None`` so callers that legitimately can't
+    wait can branch on it. The async ``_wait_for_fresh_advertisement``
+    is the primary entry point for the runner.
+    """
     _, coordinator = await _setup(hass)
     with patch(
         "custom_components.atorch_ble.coordinator.bluetooth.async_ble_device_from_address",
         return_value=None,
     ):
-        with pytest.raises(BleakError):
-            coordinator._resolve_ble_device()
+        assert coordinator._resolve_ble_device() is None
+
+
+async def test_wait_for_fresh_advertisement_fast_path(
+    hass: HomeAssistant,
+) -> None:
+    """Fast path: registry has a connectable BLEDevice -> return immediately.
+
+    ``async_register_callback`` MUST NOT be invoked when the fast path
+    succeeds, otherwise we'd leak a callback for every successful
+    connect.
+    """
+    _, coordinator = await _setup(hass)
+    fake_device = MagicMock(spec=BLEDevice)
+    with patch(
+        "custom_components.atorch_ble.coordinator.bluetooth.async_ble_device_from_address",
+        return_value=fake_device,
+    ) as mock_lookup, patch(
+        "custom_components.atorch_ble.coordinator.bluetooth.async_register_callback"
+    ) as mock_register:
+        result = await coordinator._wait_for_fresh_advertisement()
+    assert result is fake_device
+    mock_lookup.assert_called_once()
+    mock_register.assert_not_called()
+
+
+async def test_wait_for_fresh_advertisement_slow_path_arrival(
+    hass: HomeAssistant,
+) -> None:
+    """Slow path: lookup misses, advertisement arrives, second lookup hits.
+
+    Patches ``async_register_callback`` to capture the registered
+    callback, then drives it from the test to simulate an
+    advertisement arriving.
+    """
+    _, coordinator = await _setup(hass)
+    fake_device = MagicMock(spec=BLEDevice)
+    captured: dict[str, object] = {}
+
+    def _capture_register(_hass, cb, _matcher, _mode):
+        captured["cb"] = cb
+        # Fire the advertisement on the loop as soon as it spins.
+        hass.loop.call_soon(cb, MagicMock(), MagicMock())
+        return MagicMock()
+
+    # First lookup (fast path) returns None; second (post-event) returns device.
+    with patch(
+        "custom_components.atorch_ble.coordinator.bluetooth.async_ble_device_from_address",
+        side_effect=[None, fake_device],
+    ), patch(
+        "custom_components.atorch_ble.coordinator.bluetooth.async_register_callback",
+        side_effect=_capture_register,
+    ):
+        result = await coordinator._wait_for_fresh_advertisement()
+
+    assert result is fake_device
+    assert "cb" in captured
+
+
+async def test_wait_for_fresh_advertisement_timeout_raises(
+    hass: HomeAssistant,
+) -> None:
+    """Slow path with no advertisement within timeout -> BleakError."""
+    _, coordinator = await _setup(hass)
+
+    # Patch the timeout constant so the test doesn't have to wait 10 min.
+    with patch(
+        "custom_components.atorch_ble.coordinator.bluetooth.async_ble_device_from_address",
+        return_value=None,
+    ), patch(
+        "custom_components.atorch_ble.coordinator.bluetooth.async_register_callback",
+        return_value=MagicMock(),
+    ), patch(
+        "custom_components.atorch_ble.coordinator.ADVERTISEMENT_WAIT_TIMEOUT_SECONDS",
+        0.05,
+    ):
+        with pytest.raises(BleakError, match="No advertisement"):
+            await coordinator._wait_for_fresh_advertisement()
 
 
 async def test_notification_callback_valid_frame(

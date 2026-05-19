@@ -46,8 +46,18 @@ MAX_POLL_INTERVAL_SECONDS = 3600
 CHARACTERISTIC_UUID = "0000FFE1-0000-1000-8000-00805F9B34FB"
 
 # Connection backoff parameters (persistent and polled both share these).
+# Cap shortened from 60 s in v0.1.1: advertisement-wait now handles the
+# "device unreachable" case implicitly, so the outer backoff only needs
+# to cover transient GATT-layer failures.
 RECONNECT_INITIAL_BACKOFF_SECONDS = 5.0
-RECONNECT_MAX_BACKOFF_SECONDS = 60.0
+RECONNECT_MAX_BACKOFF_SECONDS = 30.0
+
+# Upper bound on how long the coordinator will block waiting for a fresh
+# BLE advertisement from the meter before treating it as a connect
+# failure. Some J7-C firmware variants advertise every several minutes
+# when idle, so this needs to be substantially larger than HA's
+# connectable-registry freshness window (~90 s).
+ADVERTISEMENT_WAIT_TIMEOUT_SECONDS = 600
 
 # One-shot polled-cycle notification wait timeout.
 POLLED_NOTIFICATION_TIMEOUT_SECONDS = 5.0

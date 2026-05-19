@@ -10,6 +10,12 @@ Releases are cut by pushing a `vMAJOR.MINOR.PATCH` tag; the
 `custom_components/atorch_ble/` into `atorch_ble.zip` and attaches it
 to the GitHub Release.
 
+## [0.1.1] - 2026-05-19
+
+### Fixed
+- Coordinator now waits for a fresh BLE advertisement before attempting connection, instead of retrying on a timer. Fixes the case where slow-advertising J7-C firmware variants (advert interval > 60s when idle) would never connect because every timer-driven retry attempt fell outside HA's connectable-registry freshness window.
+- Outer reconnect backoff cap shortened from 60s to 30s. Since advertisement-wait now handles the "device unreachable" case implicitly, the outer backoff only needs to handle transient GATT-layer failures.
+
 ## [0.1.0] - 2026-05-19
 
 Initial release.
