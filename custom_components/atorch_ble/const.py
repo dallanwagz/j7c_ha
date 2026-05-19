@@ -39,3 +39,26 @@ DEFAULT_CONNECTION_MODE = MODE_PERSISTENT
 DEFAULT_POLL_INTERVAL_SECONDS = 60
 MIN_POLL_INTERVAL_SECONDS = 10
 MAX_POLL_INTERVAL_SECONDS = 3600
+
+# BLE GATT characteristic carrying Atorch USB-meter notification frames.
+# Locked by the device firmware; do not change without verifying against
+# a real capture (see batch-1/02 notes).
+CHARACTERISTIC_UUID = "0000FFE1-0000-1000-8000-00805F9B34FB"
+
+# Connection backoff parameters (persistent and polled both share these).
+RECONNECT_INITIAL_BACKOFF_SECONDS = 5.0
+RECONNECT_MAX_BACKOFF_SECONDS = 60.0
+
+# One-shot polled-cycle notification wait timeout.
+POLLED_NOTIFICATION_TIMEOUT_SECONDS = 5.0
+
+# Repair-issue thresholds.
+CONNECT_FAILURE_RAISE_THRESHOLD = 5
+CONNECT_FAILURE_RERAISE_INTERVAL = 50
+
+# Persistent storage key on entry.data for acknowledged-unsupported bytes.
+ACK_UNSUPPORTED_KEY = "acknowledged_unsupported_packet_types"
+
+# Repair issue IDs / translation keys.
+ISSUE_CANNOT_CONNECT = "cannot_connect_after_setup"
+ISSUE_UNSUPPORTED_PACKET_TYPE_PREFIX = "unsupported_packet_type_0x"
