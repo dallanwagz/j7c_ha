@@ -59,7 +59,7 @@ from homeassistant.components.bluetooth.active_update_processor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.device_registry import format_mac
@@ -199,6 +199,26 @@ class AtorchBleCoordinator(
         # coordinator is live; used to gate option-update transitions.
         self._started: bool = False
 
+        # Latest published snapshot. ``CoordinatorEntity`` and our sensor
+        # entity both read ``coordinator.data``; the
+        # ``PassiveBluetoothProcessorCoordinator`` base does not expose
+        # this attribute (it dispatches updates through registered
+        # processors instead), so we maintain it ourselves and refresh
+        # it from inside ``async_set_updated_data``.
+        self.data: AtorchBleData | None = None
+
+        # CoordinatorEntity listener registry.
+        # ``ActiveBluetoothProcessorCoordinator`` extends
+        # ``PassiveBluetoothProcessorCoordinator``, NOT ``DataUpdateCoordinator``,
+        # so the ``async_add_listener`` method that
+        # ``CoordinatorEntity.async_added_to_hass`` invokes is absent from the
+        # base class. Without this shim, every entity raises ``AttributeError``
+        # the moment HA tries to subscribe it, and sensors would never receive
+        # coordinator updates at runtime. The shim mirrors the
+        # ``DataUpdateCoordinator`` API surface that ``CoordinatorEntity``
+        # depends on: callable registration + idempotent removal.
+        self._listeners: list[CALLBACK_TYPE] = []
+
         super().__init__(
             hass=hass,
             logger=_LOGGER,
@@ -266,6 +286,59 @@ class AtorchBleCoordinator(
         total_notifs = sum(int(b[1]) for b in self._buckets)
         total_errors = sum(int(b[2]) for b in self._buckets)
         return total_errors / max(1, total_notifs)
+
+    # ------------------------------------------------------------------
+    # CoordinatorEntity listener-registry shim
+    # ------------------------------------------------------------------
+
+    @callback
+    def async_add_listener(
+        self, update_callback: CALLBACK_TYPE, context: Any = None
+    ) -> CALLBACK_TYPE:
+        """Register a listener for entity updates.
+
+        Mirrors ``DataUpdateCoordinator.async_add_listener`` so that
+        ``CoordinatorEntity.async_added_to_hass`` can subscribe entities
+        without ``AttributeError``. ``context`` is accepted for API
+        parity but unused — every listener gets every update.
+        """
+        @callback
+        def remove_listener() -> None:
+            if update_callback in self._listeners:
+                self._listeners.remove(update_callback)
+
+        self._listeners.append(update_callback)
+        return remove_listener
+
+    @callback
+    def async_set_updated_data(self, update: AtorchBleData | None) -> None:
+        """Publish a fresh snapshot.
+
+        Wraps the base coordinator's dispatch with two responsibilities
+        the base class does NOT cover:
+
+        * Update ``self.data`` so that ``CoordinatorEntity.coordinator.data``
+          (the canonical read path for sensor entities) reflects the
+          latest snapshot. ``PassiveBluetoothProcessorCoordinator`` only
+          fans out to registered processors and never stores ``data``.
+        * Notify the entity listener registry so ``CoordinatorEntity``
+          subscribers call ``async_write_ha_state`` and HA's state
+          machine picks up the new value.
+        """
+        self.data = update
+        super().async_set_updated_data(update)
+        self._async_notify_listeners()
+
+    @callback
+    def _async_notify_listeners(self) -> None:
+        """Invoke all registered listeners.
+
+        Called whenever a fresh data snapshot is published. Iterates a
+        copy so listener-side ``async_on_remove`` callbacks that mutate
+        the list during iteration are safe.
+        """
+        for cb in list(self._listeners):
+            cb()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -627,7 +700,12 @@ class AtorchBleCoordinator(
             )
 
         if readings:
-            # Push fresh snapshot through the base coordinator's listeners.
+            # Push fresh snapshot. The overridden
+            # ``async_set_updated_data`` updates ``self.data``, fans the
+            # snapshot through the base processor pipeline, AND notifies
+            # the CoordinatorEntity listener registry so sensor entities
+            # call ``async_write_ha_state`` and the HA UI reflects the
+            # new value.
             self.async_set_updated_data(self._snapshot())
 
     # ------------------------------------------------------------------

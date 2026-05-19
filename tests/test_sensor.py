@@ -195,44 +195,34 @@ async def test_device_class_correct(hass: HomeAssistant) -> None:
     assert by_key["capacity"].device_class is None
 
 
-async def test_entity_native_value_and_availability(
+async def test_entity_state_propagation_through_ha_pipeline(
     hass: HomeAssistant,
 ) -> None:
-    """AtorchBleSensor.native_value / available work against the coordinator.
+    """A coordinator update propagates to HA state via the listener pipeline.
 
-    Exercises the entity class directly (sidestepping HA's state machine)
-    so we cover the freshness-window availability rule, the value_fn
-    branch, the value_fn_coordinator diagnostic branch, and the
-    transition-debug log path on becoming unavailable.
+    This is the real-HA test that the previous value_fn-direct workaround
+    was hiding: ``CoordinatorEntity.async_added_to_hass`` subscribes via
+    ``coordinator.async_add_listener``, the coordinator's
+    ``async_set_updated_data`` notifies subscribers, and each entity's
+    ``async_write_ha_state`` lands the new value in ``hass.states``.
+
+    Covers the freshness-window availability rule, the value_fn branch,
+    and the value_fn_coordinator diagnostic branch — all driven by the
+    real entity lifecycle, not direct ``native_value`` calls.
     """
     from datetime import datetime, timedelta, timezone
-
-    from custom_components.atorch_ble.sensor import (
-        DESCRIPTIONS,
-        AtorchBleSensor,
-    )
 
     entry = await _setup(hass)
     coordinator = hass.data[DOMAIN][entry.entry_id]
 
-    by_key = {d.key: d for d in DESCRIPTIONS}
-    voltage_sensor = AtorchBleSensor(coordinator, by_key["voltage"])
-    conn_state_sensor = AtorchBleSensor(coordinator, by_key["connection_state"])
+    # No reading yet -> voltage sensor reports "unavailable"; the
+    # diagnostic connection_state sensor is enabled-by-default false so
+    # it would not be in hass.states; assert via the coordinator path.
+    voltage_state = hass.states.get("sensor.atorch_j7_c_eeff_voltage")
+    assert voltage_state is not None
+    assert voltage_state.state == "unavailable"
 
-    # Seed coordinator.data — the ActiveBluetoothProcessorCoordinator base
-    # class does not auto-create this attribute the way DataUpdateCoordinator
-    # does, so the AtorchBleSensor.native_value access path needs it
-    # explicitly. None means "no reading yet".
-    coordinator.data = None
-
-    # No reading yet -> voltage sensor unavailable (returns None / False).
-    assert voltage_sensor.native_value is None
-    assert voltage_sensor.available is False
-    # Diagnostic sensor is always available; reports the connection_state.
-    assert conn_state_sensor.available is True
-    assert conn_state_sensor.native_value == coordinator.connection_state
-
-    # Publish a reading + recent last_seen -> voltage sensor available.
+    # Publish a reading via the real coordinator pipeline.
     reading = UsbMeterReading(
         voltage_v=5.0,
         current_a=1.0,
@@ -245,19 +235,78 @@ async def test_entity_native_value_and_availability(
     )
     coordinator._last_reading = reading
     coordinator._last_seen = datetime.now(timezone.utc)
-    # Push the snapshot through the base coordinator's data setter
-    # by patching the underlying _data attribute so the entity's
-    # coordinator.data accessor sees the new snapshot. We avoid
-    # async_set_updated_data here because it fires entity-registration
-    # listener callbacks that the test isn't standing up.
-    snap = AtorchBleData(reading=reading, power_w=5.0)
-    coordinator.data = snap
-    assert voltage_sensor.native_value == 5.0
-    assert voltage_sensor.available is True
+    snapshot = AtorchBleData(reading=reading, power_w=5.0)
+    coordinator.async_set_updated_data(snapshot)
+    await hass.async_block_till_done()
 
-    # Backdate last_seen well past the freshness window -> unavailable.
+    voltage_state = hass.states.get("sensor.atorch_j7_c_eeff_voltage")
+    assert voltage_state.state == "5.0"
+    power_state = hass.states.get("sensor.atorch_j7_c_eeff_power")
+    assert power_state.state == "5.0"
+
+    # Backdate last_seen well past the freshness window. Re-publishing
+    # the snapshot drives a fresh write_ha_state cycle through the
+    # listener pipeline, and the availability flips to unavailable.
     coordinator._last_seen = datetime.now(timezone.utc) - timedelta(hours=1)
-    assert voltage_sensor.available is False
+    coordinator.async_set_updated_data(snapshot)
+    await hass.async_block_till_done()
+    voltage_state = hass.states.get("sensor.atorch_j7_c_eeff_voltage")
+    assert voltage_state.state == "unavailable"
+
+
+async def test_native_value_branches(hass: HomeAssistant) -> None:
+    """``native_value`` covers both value-source branches + the no-data case.
+
+    The HA-pipeline test above drives the value_fn happy path, but the
+    diagnostic ``value_fn_coordinator`` sensor is disabled-by-default
+    and would not be in ``hass.states``. This test exercises the entity
+    accessor directly to keep coverage on the diagnostic branch and the
+    ``data is None`` short-circuit.
+    """
+    from custom_components.atorch_ble.sensor import (
+        DESCRIPTIONS,
+        AtorchBleSensor,
+    )
+
+    entry = await _setup(hass)
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+
+    by_key = {d.key: d for d in DESCRIPTIONS}
+    voltage_sensor = AtorchBleSensor(coordinator, by_key["voltage"])
+    conn_state_sensor = AtorchBleSensor(coordinator, by_key["connection_state"])
+
+    # value_fn branch with no data yet -> None / unavailable.
+    assert coordinator.data is None
+    assert voltage_sensor.native_value is None
+
+    # value_fn_coordinator branch -> always reads coordinator state.
+    assert conn_state_sensor.available is True
+    assert conn_state_sensor.native_value == coordinator.connection_state
+
+
+async def test_listener_removal_is_idempotent(hass: HomeAssistant) -> None:
+    """The unsubscribe callback returned by async_add_listener is idempotent.
+
+    Mirrors ``DataUpdateCoordinator``'s contract: calling the remover
+    twice is harmless. Guards the shim against a stale unsubscribe
+    handle that fires after the entity has already been removed.
+    """
+    entry = await _setup(hass)
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+
+    calls: list[None] = []
+
+    def _on_update() -> None:
+        calls.append(None)
+
+    remove = coordinator.async_add_listener(_on_update)
+    coordinator._async_notify_listeners()
+    assert len(calls) == 1
+    remove()
+    coordinator._async_notify_listeners()
+    assert len(calls) == 1  # no further calls after removal
+    # Second remove is a no-op, not an error.
+    remove()
 
 
 async def test_connection_state_enum_options(hass: HomeAssistant) -> None:
