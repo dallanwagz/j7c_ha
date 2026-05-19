@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "j7c_ha"
+version = "0.1.0"
+description = "Home Assistant custom component for Atorch BLE power meters (J7-C, UC96)."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.12"
+authors = [{ name = "Dallan Wagner" }]
+dependencies = [
+    "atorch-ble==0.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "homeassistant",
+    "pytest-homeassistant-custom-component",
+    "ruff",
+    "mypy",
+]
+
+[project.urls]
+Homepage = "https://github.com/dallanwagz/j7c_ha"
+Issues = "https://github.com/dallanwagz/j7c_ha/issues"
+
+[tool.setuptools.packages.find]
+include = ["custom_components*"]
