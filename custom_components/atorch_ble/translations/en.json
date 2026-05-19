@@ -1,6 +1,16 @@
 {
   "config": {
-    "step": {}
+    "step": {
+      "bluetooth_confirm": {
+        "title": "Confirm Atorch J7-C",
+        "description": "TODO: confirm copy for {name} ({address})"
+      }
+    },
+    "abort": {
+      "already_configured": "TODO: already_configured copy",
+      "not_supported_device": "TODO: not_supported_device copy (see {issue_url})",
+      "discovery_only": "TODO: discovery_only copy"
+    }
   },
   "options": {
     "step": {}
