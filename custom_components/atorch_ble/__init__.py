@@ -5,8 +5,9 @@ from __future__ import annotations
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 
-from .const import DOMAIN
+from .const import DOMAIN, PACKET_TYPE_TO_MODEL
 from .coordinator import AtorchBleCoordinator
 
 type AtorchBleConfigEntry = ConfigEntry[AtorchBleCoordinator]
@@ -23,6 +24,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: AtorchBleConfigEntry) ->
     coordinator = AtorchBleCoordinator(hass, entry)
     await coordinator.async_start()
     hass.data[DOMAIN][entry.entry_id] = coordinator
+
+    # Initial device-registry registration (per ticket #15). Runtime model
+    # updates on observing an unsupported packet type are owned by the
+    # coordinator (#21) which calls device_registry.async_update_device
+    # from the notification callback path. We register the canonical
+    # J7-C entry here so sensors created in batch-3 have a device to
+    # attach to, even before the first frame is decoded.
+    mac_normalized = coordinator.mac_normalized
+    mac_last4_upper = mac_normalized.replace(":", "")[-4:].upper()
+    device_registry = dr.async_get(hass)
+    device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, mac_normalized)},
+        connections={(dr.CONNECTION_BLUETOOTH, mac_normalized)},
+        manufacturer="Atorch",
+        model=PACKET_TYPE_TO_MODEL[0x03],
+        name=f"Atorch J7-C ({mac_last4_upper})",
+        hw_version="UC96",
+    )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
