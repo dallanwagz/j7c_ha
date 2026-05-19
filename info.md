@@ -5,7 +5,7 @@ Home Assistant custom integration for the **Atorch J7-C USB power meter** over B
 ## Features
 
 - BLE discovery; no manual MAC entry
-- 10 sensors (8 default-enabled, 2 advanced USB D+/D-, plus a disabled-by-default `connection_state` diagnostic)
+- 10 sensors (7 default-enabled, 2 advanced USB D+/D-, plus a disabled-by-default `connection_state` diagnostic)
 - Two connection modes via options flow: **persistent** (1 Hz, holds one proxy slot) and **polled** (configurable 10–3600 s interval)
 - Works identically over a local Bluetooth adapter or an ESPHome Bluetooth proxy
 - Repair issues surface unsupported packet types and cannot-connect-after-setup conditions

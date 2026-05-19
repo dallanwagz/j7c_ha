@@ -6,10 +6,11 @@ rules:
   appropriate-polling:
     status: done
     comment: |
-      ActiveBluetoothProcessorCoordinator pushes via BLE advertisements
-      (passive mode) and connects on demand in poll mode. Cadence is governed
-      by the device packet rate (~1 Hz) or the user-selected poll interval
-      (batch-2/04).
+      Atorch measurements arrive via GATT notifications, not advertisements.
+      ActiveBluetoothProcessorCoordinator is used as the base coordinator
+      class; the runner task manages the actual GATT connection and cadence.
+      Cadence is governed by the device notification rate (~1 Hz in persistent
+      mode) or the user-selected poll interval (batch-2/04).
   brands:
     status: todo
     target: 0.2.0
@@ -35,16 +36,13 @@ rules:
     status: exempt
     comment: Integration registers no services or actions.
   docs-high-level-description:
-    status: todo
-    target: 0.1.0
+    status: done
     comment: README authored in batch-4/04 (#11).
   docs-installation-instructions:
-    status: todo
-    target: 0.1.0
+    status: done
     comment: README authored in batch-4/04 (#11).
   docs-removal-instructions:
-    status: todo
-    target: 0.1.0
+    status: done
     comment: README authored in batch-4/04 (#11).
   entity-event-setup:
     status: exempt
@@ -90,14 +88,12 @@ rules:
       async_unload_entry unloads platforms and stops the coordinator;
       verified by tests/test_init.py (batch-4/03, #20).
   docs-configuration-parameters:
-    status: todo
-    target: 0.1.0
+    status: done
     comment: |
       Options-flow knobs (`connection_mode`, `poll_interval_seconds`)
       documented in README (#11).
   docs-installation-parameters:
-    status: todo
-    target: 0.1.0
+    status: done
     comment: README authored in batch-4/04 (#11).
   entity-unavailable:
     status: done
@@ -126,7 +122,8 @@ rules:
   test-coverage:
     status: done
     comment: |
-      90% project coverage gate; config/options flows at 95% (#16, #20).
+      95% project coverage gate (pyproject.toml --cov-fail-under=95);
+      actual coverage 98.29% across 60 tests (#16, #20).
 
   # Gold
   devices:
@@ -151,34 +148,27 @@ rules:
       Bluetooth matchers in manifest.json on local_name `UC96_BLE` + service
       UUID `0000ffe0-0000-1000-8000-00805f9b34fb` (batch-2/01).
   docs-data-update:
-    status: todo
-    target: 0.1.0
+    status: done
     comment: README authored in batch-4/04 (#11).
   docs-examples:
-    status: todo
-    target: 0.1.0
+    status: done
     comment: README authored in batch-4/04 (#11).
   docs-known-limitations:
-    status: todo
-    target: 0.1.0
+    status: done
     comment: |
       README (#11) documents non-resettable energy/capacity counter and
       persistent-mode slot pressure.
   docs-supported-devices:
-    status: todo
-    target: 0.1.0
+    status: done
     comment: README authored in batch-4/04 (#11); J7-C only in v1.
   docs-supported-functions:
-    status: todo
-    target: 0.1.0
+    status: done
     comment: README authored in batch-4/04 (#11).
   docs-troubleshooting:
-    status: todo
-    target: 0.1.0
+    status: done
     comment: README authored in batch-4/04 (#11).
   docs-use-cases:
-    status: todo
-    target: 0.1.0
+    status: done
     comment: README authored in batch-4/04 (#11).
   dynamic-devices:
     status: exempt
@@ -234,6 +224,14 @@ rules:
       (#21): `unsupported_packet_type` for non-0x03 packets and
       `cannot_connect_after_setup` after 5 consecutive post-setup
       connection failures (auto-cleared on next success).
+
+      Dismissal asymmetry is intentional: `unsupported_packet_type`
+      acknowledgements are persisted to entry.data so the issue does not
+      re-surface after an HA restart (one-time discovery; post-restart
+      silence is correct UX). `cannot_connect_after_setup` is runtime-only
+      and re-raises at threshold+50 failures (post-restart re-raise is
+      correct UX — the user needs to know if the device is still
+      unreachable).
   stale-devices:
     status: exempt
     comment: |

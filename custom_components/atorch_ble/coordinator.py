@@ -23,6 +23,42 @@ Repair issues, device-registry ``model`` sync, and config-entry title
 rewriting for unsupported packet types are all driven from the
 notification callback path; see :meth:`_handle_unsupported_packet_type`
 and :meth:`_handle_decoded_frame`.
+
+**Listener-shim rationale.** :class:`PassiveBluetoothProcessorEntity`
+is the native HA entity class for
+:class:`~homeassistant.components.bluetooth.active_update_processor.ActiveBluetoothProcessorCoordinator`,
+but it is advertisement-driven: entities refresh on each BLE
+advertisement received by the scanner. Atorch measurements arrive via
+GATT notifications, not advertisements — the advertisement stream is
+only used for discovery and as a liveness trigger for the framework's
+``needs_poll_method`` hook. Using ``PassiveBluetoothProcessorEntity``
+directly would therefore produce entities that only update when an
+advertisement is seen, not when a measurement arrives. Instead,
+:class:`AtorchBleCoordinator` inherits from
+:class:`~homeassistant.helpers.update_coordinator.CoordinatorEntity`
+(via ``CoordinatorEntity[AtorchBleCoordinator]`` in ``sensor.py``) and
+shims the ``async_add_listener`` / ``async_set_updated_data`` methods
+that ``CoordinatorEntity.async_added_to_hass`` expects. This gives
+entities the correct ``DataUpdateCoordinator``-style subscription
+semantics driven by GATT notification delivery.
+
+**Repair-issue dismissal asymmetry.** Two repair issues are raised with
+deliberately different dismissal persistence:
+
+* ``unsupported_packet_type`` — acknowledgement is persisted to
+  ``entry.data`` (see ``ACK_UNSUPPORTED_KEY``). This is intentional:
+  the issue represents a one-time discovery of an unsupported device
+  variant; re-surfacing it on every HA restart would be noisy and
+  unhelpful because the user cannot change the packet type the physical
+  device emits.
+
+* ``cannot_connect_after_setup`` — dismissal is runtime-only; the issue
+  re-raises at ``CONNECT_FAILURE_RAISE_THRESHOLD`` (5) failures after
+  setup, and re-raises again every ``CONNECT_FAILURE_RERAISE_INTERVAL``
+  (50) additional failures thereafter. This is intentional: an
+  unreachable device after an HA restart is a fresh condition the user
+  needs to be notified about, so persisting the dismissal would hide a
+  real problem.
 """
 
 from __future__ import annotations
