@@ -1,0 +1,66 @@
+name: Core readiness
+
+# Verifies that atorch_ble still grafts cleanly into a fresh
+# home-assistant/core dev checkout — catches manifest / translation
+# / requirements regressions before they bite during the upstream
+# PR. See UPSTREAM.md for the full procedure.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hassfest-against-core:
+    name: Hassfest against home-assistant/core dev
+    runs-on: ubuntu-latest
+    # Advisory only — surfacing findings is the goal, not gating
+    # merges on a Core-API moving target. Flip to required once the
+    # outstanding findings in UPSTREAM.md are resolved.
+    continue-on-error: true
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+        with:
+          path: integration
+
+      - name: Clone home-assistant/core (shallow, dev branch)
+        run: |
+          git clone --depth=1 --branch dev \
+            https://github.com/home-assistant/core.git core
+
+      - name: Copy integration into Core tree
+        run: |
+          cp -r integration/custom_components/atorch_ble \
+                core/homeassistant/components/atorch_ble
+          rm -rf core/homeassistant/components/atorch_ble/__pycache__
+
+      - name: Strip `version` field from manifest (Core forbids it)
+        run: |
+          python -c "import json; \
+p='core/homeassistant/components/atorch_ble/manifest.json'; \
+m=json.load(open(p)); m.pop('version', None); \
+json.dump(m, open(p, 'w'), indent=2)"
+          cat core/homeassistant/components/atorch_ble/manifest.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Core runtime requirements + hassfest extras
+        working-directory: core
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install tqdm pipdeptree license-expression ruff
+
+      - name: Run hassfest against grafted integration
+        working-directory: core
+        run: |
+          python -m script.hassfest \
+            --integration-path homeassistant/components/atorch_ble
