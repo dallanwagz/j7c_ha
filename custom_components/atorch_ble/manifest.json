@@ -1,0 +1,20 @@
+{
+  "domain": "atorch_ble",
+  "name": "Atorch BLE Power Meter",
+  "bluetooth": [
+    {
+      "local_name": "UC96_BLE",
+      "service_uuid": "0000ffe0-0000-1000-8000-00805f9b34fb",
+      "connectable": true
+    }
+  ],
+  "codeowners": ["@dallanwagz"],
+  "config_flow": true,
+  "dependencies": ["bluetooth_adapters"],
+  "documentation": "https://github.com/dallanwagz/j7c_ha",
+  "integration_type": "device",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/dallanwagz/j7c_ha/issues",
+  "requirements": ["atorch-ble==0.1.0"],
+  "version": "0.1.0"
+}

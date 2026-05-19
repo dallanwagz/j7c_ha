@@ -1,0 +1,42 @@
+{
+  "config": {
+    "step": {
+      "bluetooth_confirm": {
+        "title": "Confirm Atorch J7-C",
+        "description": "TODO: confirm copy for {name} ({address})"
+      }
+    },
+    "abort": {
+      "already_configured": "TODO: already_configured copy",
+      "not_supported_device": "TODO: not_supported_device copy (see {issue_url})",
+      "discovery_only": "TODO: discovery_only copy"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "TODO: options init title",
+        "description": "TODO: options init description",
+        "data": {
+          "connection_mode": "TODO: connection_mode label",
+          "poll_interval_seconds": "TODO: poll_interval_seconds label"
+        },
+        "data_description": {
+          "connection_mode": "TODO: connection_mode help text",
+          "poll_interval_seconds": "TODO: poll_interval_seconds help text"
+        }
+      }
+    },
+    "error": {
+      "interval_out_of_range": "TODO: interval_out_of_range copy"
+    }
+  },
+  "selector": {
+    "connection_mode": {
+      "options": {
+        "persistent": "TODO: persistent label",
+        "polled": "TODO: polled label"
+      }
+    }
+  }
+}
