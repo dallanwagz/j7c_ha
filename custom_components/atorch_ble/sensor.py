@@ -31,6 +31,8 @@ from homeassistant.const import (
     UnitOfElectricPotential,
     UnitOfEnergy,
     UnitOfPower,
+    UnitOfTemperature,
+    UnitOfTime,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -78,7 +80,7 @@ class AtorchBleSensorEntityDescription(SensorEntityDescription):
 _CAPACITY_UNIT: str = "mAh"
 
 
-PRIMARY_DESCRIPTIONS: tuple[AtorchBleSensorEntityDescription, ...] = (
+DESCRIPTIONS: tuple[AtorchBleSensorEntityDescription, ...] = (
     AtorchBleSensorEntityDescription(
         key="voltage",
         translation_key="voltage",
@@ -128,6 +130,54 @@ PRIMARY_DESCRIPTIONS: tuple[AtorchBleSensorEntityDescription, ...] = (
         suggested_display_precision=0,
         entity_registry_enabled_default=True,
         value_fn=lambda d: d.reading.capacity_mah,
+    ),
+    # Secondary sensors (batch-3/02). Temperature and runtime are
+    # default-enabled; the two USB data-line voltages below are
+    # advanced/disabled-by-default.
+    AtorchBleSensorEntityDescription(
+        key="temperature",
+        translation_key="temperature",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        suggested_display_precision=0,
+        entity_registry_enabled_default=True,
+        value_fn=lambda d: d.reading.temperature_c,
+    ),
+    AtorchBleSensorEntityDescription(
+        key="runtime",
+        translation_key="runtime",
+        device_class=SensorDeviceClass.DURATION,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        suggested_display_precision=0,
+        entity_registry_enabled_default=True,
+        value_fn=lambda d: d.reading.duration_s,
+    ),
+    # D+ / D- expose the USB data-line voltages reported by the J7-C.
+    # They are advanced/disabled-by-default — useful primarily for
+    # USB-PD or charger-protocol debugging — so they ship with
+    # ``entity_registry_enabled_default=False`` and a translation_key
+    # so users can rename / enable them later.
+    AtorchBleSensorEntityDescription(
+        key="voltage_dplus",
+        translation_key="voltage_dplus",
+        device_class=SensorDeviceClass.VOLTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        suggested_display_precision=3,
+        entity_registry_enabled_default=False,
+        value_fn=lambda d: d.reading.voltage_dplus_v,
+    ),
+    AtorchBleSensorEntityDescription(
+        key="voltage_dminus",
+        translation_key="voltage_dminus",
+        device_class=SensorDeviceClass.VOLTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        suggested_display_precision=3,
+        entity_registry_enabled_default=False,
+        value_fn=lambda d: d.reading.voltage_dminus_v,
     ),
 )
 
@@ -206,5 +256,5 @@ async def async_setup_entry(
     coordinator: AtorchBleCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
         AtorchBleSensor(coordinator, description)
-        for description in PRIMARY_DESCRIPTIONS
+        for description in DESCRIPTIONS
     )
