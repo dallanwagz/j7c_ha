@@ -1,0 +1,30 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Package and publish release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pack integration into atorch_ble.zip
+        run: |
+          cd custom_components/atorch_ble
+          zip -r "${GITHUB_WORKSPACE}/atorch_ble.zip" . \
+            -x "__pycache__/*" "*.pyc" "*.pyo"
+
+      - name: Create GitHub Release with asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: atorch_ble.zip
+          generate_release_notes: true
+          fail_on_unmatched_files: true

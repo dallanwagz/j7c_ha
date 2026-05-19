@@ -1,0 +1,259 @@
+rules:
+  # Bronze
+  action-setup:
+    status: exempt
+    comment: Integration registers no services or actions.
+  appropriate-polling:
+    status: done
+    comment: |
+      ActiveBluetoothProcessorCoordinator pushes via BLE advertisements
+      (passive mode) and connects on demand in poll mode. Cadence is governed
+      by the device packet rate (~1 Hz) or the user-selected poll interval
+      (batch-2/04).
+  brands:
+    status: todo
+    target: 0.2.0
+    comment: |
+      Brand assets land at HA Core readiness pass (batch-4/05). Not blocking
+      for HACS custom-component distribution.
+  common-modules: done
+  config-flow-test-coverage:
+    status: done
+    comment: 95% coverage gate enforced on config_flow.py and tests/test_config_flow.py (#16).
+  config-flow:
+    status: done
+    comment: |
+      Bluetooth discovery + confirm flow in config_flow.py (batch-2/02, #13).
+      Manual user step intentionally omitted per UX decision — v1 relies on
+      bluetooth discovery only.
+  dependency-transparency:
+    status: done
+    comment: |
+      Pinned `atorch-ble==0.1.0` in manifest.json requirements; library
+      published from a sibling repo with reproducible builds.
+  docs-actions:
+    status: exempt
+    comment: Integration registers no services or actions.
+  docs-high-level-description:
+    status: todo
+    target: 0.1.0
+    comment: README authored in batch-4/04 (#11).
+  docs-installation-instructions:
+    status: todo
+    target: 0.1.0
+    comment: README authored in batch-4/04 (#11).
+  docs-removal-instructions:
+    status: todo
+    target: 0.1.0
+    comment: README authored in batch-4/04 (#11).
+  entity-event-setup:
+    status: exempt
+    comment: |
+      Sensors do not subscribe to external event sources; values flow via the
+      coordinator's data dict. No explicit event subscription required.
+  entity-unique-id:
+    status: done
+    comment: sensor.py sets unique_id = f"{mac_stripped}_{description.key}" (batch-3/01).
+  has-entity-name:
+    status: done
+    comment: All AtorchBleSensor instances set `_attr_has_entity_name = True` (batch-3/01).
+  runtime-data:
+    status: done
+    comment: |
+      ConfigEntry.runtime_data holds the AtorchBleCoordinator; no state
+      lives in hass.data[DOMAIN] for per-entry data.
+  test-before-configure:
+    status: exempt
+    comment: |
+      Bluetooth advertisements are validated by the discovery match in the
+      manifest. The confirm step has nothing further to test before commit;
+      it presents the discovered device for user acknowledgement.
+  test-before-setup:
+    status: exempt
+    comment: |
+      Passive BLE: setup cannot synchronously contact the device. Connection
+      state and freshness are exposed via the connection_state diagnostic
+      sensor and a `cannot_connect_after_setup` repair issue (#21).
+  unique-config-entry:
+    status: done
+    comment: |
+      Config entry unique_id = formatted MAC address; bluetooth discovery
+      aborts with `already_configured` when a duplicate is seen (#13).
+
+  # Silver
+  action-exceptions:
+    status: exempt
+    comment: Integration registers no services or actions.
+  config-entry-unloading:
+    status: done
+    comment: |
+      async_unload_entry unloads platforms and stops the coordinator;
+      verified by tests/test_init.py (batch-4/03, #20).
+  docs-configuration-parameters:
+    status: todo
+    target: 0.1.0
+    comment: |
+      Options-flow knobs (`connection_mode`, `poll_interval_seconds`)
+      documented in README (#11).
+  docs-installation-parameters:
+    status: todo
+    target: 0.1.0
+    comment: README authored in batch-4/04 (#11).
+  entity-unavailable:
+    status: done
+    comment: |
+      Freshness-only availability rule (#12): sensors go unavailable when no
+      packet within the unavailability window. Connection-state sensor
+      remains available to surface link health.
+  integration-owner:
+    status: done
+    comment: codeowner @dallanwagz declared in manifest.json.
+  log-when-unavailable:
+    status: done
+    comment: |
+      Coordinator logs connection failures at info on transition and at
+      debug on each retry, per logging discipline tests (#20 chunk 4/4).
+  parallel-updates:
+    status: done
+    comment: |
+      PARALLEL_UPDATES = 0 declared on the sensor platform: all reads are
+      against the coordinator's cached data; no per-entity I/O.
+  reauthentication-flow:
+    status: exempt
+    comment: |
+      Integration uses no credentials or tokens. Bluetooth is unauthenticated
+      at the link layer for the J7-C; nothing to re-auth.
+  test-coverage:
+    status: done
+    comment: |
+      90% project coverage gate; config/options flows at 95% (#16, #20).
+
+  # Gold
+  devices:
+    status: done
+    comment: |
+      Device registry entry created via the bluetooth coordinator with
+      manufacturer/model/sw_version pulled from the advertisement payload
+      (batch-2/05, #15).
+  diagnostics:
+    status: done
+    comment: |
+      diagnostics.py redacts MAC and dumps coordinator state, options, and
+      runtime counters (batch-2/05, #15).
+  discovery-update-info:
+    status: exempt
+    comment: |
+      Bluetooth MAC addresses are stable identity; no IP-style address
+      updates apply to this transport.
+  discovery:
+    status: done
+    comment: |
+      Bluetooth matchers in manifest.json on local_name `UC96_BLE` + service
+      UUID `0000ffe0-0000-1000-8000-00805f9b34fb` (batch-2/01).
+  docs-data-update:
+    status: todo
+    target: 0.1.0
+    comment: README authored in batch-4/04 (#11).
+  docs-examples:
+    status: todo
+    target: 0.1.0
+    comment: README authored in batch-4/04 (#11).
+  docs-known-limitations:
+    status: todo
+    target: 0.1.0
+    comment: |
+      README (#11) documents non-resettable energy/capacity counter and
+      persistent-mode slot pressure.
+  docs-supported-devices:
+    status: todo
+    target: 0.1.0
+    comment: README authored in batch-4/04 (#11); J7-C only in v1.
+  docs-supported-functions:
+    status: todo
+    target: 0.1.0
+    comment: README authored in batch-4/04 (#11).
+  docs-troubleshooting:
+    status: todo
+    target: 0.1.0
+    comment: README authored in batch-4/04 (#11).
+  docs-use-cases:
+    status: todo
+    target: 0.1.0
+    comment: README authored in batch-4/04 (#11).
+  dynamic-devices:
+    status: exempt
+    comment: |
+      One physical meter per config entry. Discovery handles additional
+      devices as separate entries; no dynamic per-entry sub-devices.
+  entity-category:
+    status: done
+    comment: |
+      Diagnostic entities (D+/D-, connection_state) carry
+      EntityCategory.DIAGNOSTIC; primary sensors deliberately uncategorised
+      (batch-3/02, #10; batch-3/05, #5).
+  entity-device-class:
+    status: done
+    comment: |
+      Every sensor description sets the appropriate
+      SensorDeviceClass + state_class; verified in tests/test_sensor.py
+      (batch-3/01, batch-3/02, #20).
+  entity-disabled-by-default:
+    status: done
+    comment: |
+      D+/D- voltage sensors and the connection_state diagnostic sensor are
+      registered with entity_registry_enabled_default=False (batch-3/02 #10,
+      batch-3/05 #5).
+  entity-translations:
+    status: done
+    comment: |
+      Every SensorEntityDescription has a translation_key; strings.json +
+      translations/en.json cover voltage, current, power, energy, capacity,
+      voltage_dplus, voltage_dminus, temperature, runtime, connection_state
+      (batch-3/04, #19).
+  exception-translations:
+    status: done
+    comment: |
+      Config-flow and options-flow error keys live in strings.json under
+      config.error and options.error and resolve through translations (#19).
+  icon-translations:
+    status: exempt
+    comment: |
+      All sensors rely on device-class default icons; no per-state custom
+      iconography is required for this meter.
+  reconfiguration-flow:
+    status: done
+    comment: |
+      Options flow (batch-2/03, #13) is the reconfigure surface for all
+      mutable per-entry settings (connection_mode, poll_interval_seconds).
+      MAC is immutable identity; MAC changes require delete + re-add
+      (documented in batch-4/04 README "Replacing or moving a meter").
+  repair-issues:
+    status: done
+    comment: |
+      Two repair issues raised via ir.async_create_issue in coordinator.py
+      (#21): `unsupported_packet_type` for non-0x03 packets and
+      `cannot_connect_after_setup` after 5 consecutive post-setup
+      connection failures (auto-cleared on next success).
+  stale-devices:
+    status: exempt
+    comment: |
+      One physical meter per config entry; removing the entry removes the
+      device. No per-entry stale-device cleanup applies.
+
+  # Platinum
+  async-dependency:
+    status: done
+    comment: |
+      bleak is sync at the import boundary but used via HA's async wrappers
+      (`bluetooth_data_tools`, `BluetoothServiceInfoBleak`); the `atorch-ble`
+      parser library is pure synchronous byte-decoding with no I/O; the
+      integration code path is fully async.
+  inject-websession:
+    status: exempt
+    comment: Integration performs no HTTP I/O; transport is BLE only.
+  strict-typing:
+    status: todo
+    target: 0.2.0
+    comment: |
+      Requires mypy strict config in pyproject.toml and a `py.typed` marker
+      on custom_components/atorch_ble. Tracked for v0.2.0.

@@ -18,6 +18,7 @@ dependencies = [
 dev = [
     "homeassistant",
     "pytest-homeassistant-custom-component",
+    "pytest-cov",
     "ruff",
     "mypy",
 ]
@@ -28,3 +29,12 @@ Issues = "https://github.com/dallanwagz/j7c_ha/issues"
 
 [tool.setuptools.packages.find]
 include = ["custom_components*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = [
+    "--cov=custom_components.atorch_ble",
+    "--cov-report=term-missing",
+    "--cov-fail-under=95",
+]
