@@ -36,6 +36,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -178,6 +179,27 @@ DESCRIPTIONS: tuple[AtorchBleSensorEntityDescription, ...] = (
         suggested_display_precision=3,
         entity_registry_enabled_default=False,
         value_fn=lambda d: d.reading.voltage_dminus_v,
+    ),
+    # Diagnostic connection-state sensor (batch-3/05). Reads directly
+    # from the coordinator (not coordinator.data) so it remains
+    # available even when the device is unreachable — that is precisely
+    # when the user needs to see ``failed_after_setup``. Disabled by
+    # default to keep the device card uncluttered for users who do not
+    # need to troubleshoot the connection lifecycle.
+    AtorchBleSensorEntityDescription(
+        key="connection_state",
+        translation_key="connection_state",
+        device_class=SensorDeviceClass.ENUM,
+        options=[
+            "connected",
+            "polling",
+            "disconnected",
+            "reconnecting",
+            "failed_after_setup",
+        ],
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn_coordinator=lambda coord: coord.connection_state,
     ),
 )
 
