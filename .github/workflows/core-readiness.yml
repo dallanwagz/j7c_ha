@@ -41,10 +41,13 @@ jobs:
 
       - name: Strip `version` field from manifest (Core forbids it)
         run: |
-          python -c "import json; \
-p='core/homeassistant/components/atorch_ble/manifest.json'; \
-m=json.load(open(p)); m.pop('version', None); \
-json.dump(m, open(p, 'w'), indent=2)"
+          python <<'PY'
+          import json
+          p = "core/homeassistant/components/atorch_ble/manifest.json"
+          m = json.load(open(p))
+          m.pop("version", None)
+          json.dump(m, open(p, "w"), indent=2)
+          PY
           cat core/homeassistant/components/atorch_ble/manifest.json
 
       - name: Set up Python
