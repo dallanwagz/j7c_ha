@@ -3,40 +3,101 @@
     "step": {
       "bluetooth_confirm": {
         "title": "Confirm Atorch J7-C",
-        "description": "TODO: confirm copy for {name} ({address})"
+        "description": "Add this Atorch J7-C USB power meter to Home Assistant?\n\n**Device:** {name}\n**Address:** {address}"
       }
     },
     "abort": {
-      "already_configured": "TODO: already_configured copy",
-      "not_supported_device": "TODO: not_supported_device copy (see {issue_url})",
-      "discovery_only": "TODO: discovery_only copy"
+      "already_configured": "This device is already configured.",
+      "not_supported_device": "This Bluetooth device's name does not match a supported Atorch meter. Make sure the device is a genuine Atorch J7-C or UC96 BLE module. If you believe this is wrong, file an issue with diagnostics at {issue_url}.",
+      "discovery_only": "This integration adds devices through Bluetooth discovery only. Power on your Atorch J7-C, place it in BLE range of your Bluetooth adapter or ESPHome Bluetooth proxy, and wait for Home Assistant's discovery notification. If the device does not appear within a minute, see Troubleshooting in the integration documentation."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "TODO: options init title",
-        "description": "TODO: options init description",
+        "title": "Atorch J7-C options",
+        "description": "Configure how this Atorch J7-C connects.",
         "data": {
-          "connection_mode": "TODO: connection_mode label",
-          "poll_interval_seconds": "TODO: poll_interval_seconds label"
+          "connection_mode": "Connection mode",
+          "poll_interval_seconds": "Poll interval (seconds)"
         },
         "data_description": {
-          "connection_mode": "TODO: connection_mode help text",
-          "poll_interval_seconds": "TODO: poll_interval_seconds help text"
+          "connection_mode": "Persistent gives one update per second and is best for a single meter. Polled connects every N seconds and is best when you have multiple meters sharing one Bluetooth adapter or ESPHome proxy.",
+          "poll_interval_seconds": "Only used in polled mode. How often to connect and read one measurement. Range 10–3600 seconds."
         }
       }
     },
     "error": {
-      "interval_out_of_range": "TODO: interval_out_of_range copy"
+      "interval_out_of_range": "Poll interval must be between 10 and 3600 seconds."
     }
   },
   "selector": {
     "connection_mode": {
       "options": {
-        "persistent": "TODO: persistent label",
-        "polled": "TODO: polled label"
+        "persistent": "Persistent (one update per second)",
+        "polled": "Polled (one update every N seconds)"
       }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "voltage": {
+        "name": "Voltage",
+        "description": "Live voltage reading from the meter."
+      },
+      "current": {
+        "name": "Current",
+        "description": "Live current reading from the meter."
+      },
+      "power": {
+        "name": "Power",
+        "description": "Live power, computed from voltage × current."
+      },
+      "energy": {
+        "name": "Energy",
+        "description": "Cumulative energy measured since the meter's internal counter was last reset. The J7-C does not allow this counter to be reset over Bluetooth — it can only be reset on the device's physical screen (long-press the rotary button while the energy screen is showing). Eligible for the Home Assistant Energy Dashboard."
+      },
+      "capacity": {
+        "name": "Capacity",
+        "description": "Cumulative charge in mAh since the meter's internal counter was last reset. Like energy, this counter is not resettable over Bluetooth (use the device's physical screen). Reported in mAh; this metric is not eligible for the Energy Dashboard — use the Energy (Wh) sensor for energy-dashboard tracking."
+      },
+      "voltage_dplus": {
+        "name": "USB D+ voltage",
+        "description": "USB D+ data-line voltage. Useful for diagnosing USB-PD negotiation; not relevant to most users."
+      },
+      "voltage_dminus": {
+        "name": "USB D− voltage",
+        "description": "USB D− data-line voltage. Useful for diagnosing USB-PD negotiation; not relevant to most users."
+      },
+      "temperature": {
+        "name": "Temperature",
+        "description": "Meter internal temperature."
+      },
+      "runtime": {
+        "name": "Runtime",
+        "description": "How long the meter has been running since its internal counter was last reset. Not resettable over Bluetooth."
+      },
+      "connection_state": {
+        "name": "Connection state",
+        "description": "Current BLE connection state. Useful for troubleshooting when sensors show 'Unknown' but no repair issue has been raised. Disabled by default; enable from the device page if needed.",
+        "state": {
+          "connected": "Connected (persistent mode)",
+          "polling": "Connected (polled mode)",
+          "disconnected": "Disconnected (polled mode between polls)",
+          "reconnecting": "Reconnecting",
+          "failed_after_setup": "Failed (see repair issue)"
+        }
+      }
+    }
+  },
+  "issues": {
+    "unsupported_packet_type": {
+      "title": "Unsupported Atorch device variant",
+      "description": "Your Atorch device is sending packet type 0x{packet_type} ({packet_type_family}), but this integration's v1 only supports the J7-C USB meter (packet type 0x03). What to do:\n\n- If you have a J7-C, this may be a protocol-version mismatch — please file an issue at {issue_url} with the diagnostics download from this integration's device page.\n- If you have a different Atorch model (e.g. DL24, UD18, AC meter), support is planned but not yet implemented. **Leave this integration entry in place and dismiss this notification.** Removing the entry will erase any long-term statistics history associated with this device, which may be needed when a future release adds support for your model. Dismissal is persistent — this notification will not reappear for this specific packet type unless you remove and re-add the integration entry."
+    },
+    "cannot_connect_after_setup": {
+      "title": "Cannot connect to {device_name}",
+      "description": "Home Assistant added your Atorch J7-C ({device_name}) but has not been able to connect to it. Common causes:\n\n- The device is powered off, asleep, or out of Bluetooth range.\n- The Bluetooth adapter or transport has dropped offline.\n- **If you use an ESPHome Bluetooth proxy:** the proxy may be offline, or may have run out of connection slots. Try the Polled connection mode in this integration's options to free a slot.\n\nThe integration will keep retrying. This message clears automatically once the device connects. If you have permanently removed or replaced this meter and no longer want these notifications, delete this integration's device entry from Devices & Services."
     }
   }
 }
