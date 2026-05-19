@@ -752,10 +752,14 @@ class AtorchBleCoordinator(
            production (meter advertising continuously) and in tests
            (registry pre-populated with a fake BLEDevice).
         2. **Slow path** — register a bluetooth callback scoped to the
-           meter's address (connectable scanners, active scanning mode)
-           and ``await`` an :class:`asyncio.Event` that the callback
-           sets when an advertisement arrives. After the event fires,
-           re-resolve via the same direct lookup.
+           meter's address (any scanner, passive-mode hint) and
+           ``await`` an :class:`asyncio.Event` that the callback sets
+           when an advertisement arrives. After the event fires,
+           re-resolve via the direct (``connectable=True``) lookup —
+           if the advert came in via a passive-only scanner the
+           lookup returns ``None`` and the caller treats this as a
+           connect failure, looping back into another wait; if it
+           came in via a connectable scanner we proceed to connect.
 
         Raises :class:`BleakError` on timeout
         (``ADVERTISEMENT_WAIT_TIMEOUT_SECONDS``) so the outer reconnect
@@ -785,17 +789,46 @@ class AtorchBleCoordinator(
 
         @callback
         def _on_advertisement(
-            _service_info: BluetoothServiceInfoBleak,
+            service_info: BluetoothServiceInfoBleak,
             _change: BluetoothChange,
         ) -> None:
-            _LOGGER.info("Advertisement received for %s", address)
+            # Log at INFO so the user can see we received an advert and
+            # which scanner caught it. ``connectable`` here reflects the
+            # scanner that delivered THIS advertisement; the
+            # post-wait registry lookup still gates connect-eligibility.
+            _LOGGER.info(
+                "Advertisement received for %s "
+                "(source=%s, rssi=%d, connectable=%s)",
+                self.mac_normalized,
+                service_info.source,
+                service_info.rssi,
+                service_info.connectable,
+            )
             arrived.set()
 
+        # Register a broader callback — any advertisement from this
+        # address, including those from passive-only scanners. We
+        # filter for connectable-eligibility AFTER the wait via
+        # ``async_ble_device_from_address`` (the same check the
+        # consumer would do anyway).
+        #
+        # Empirically, the stricter matcher
+        # (``connectable=True`` + ``BluetoothScanningMode.ACTIVE``)
+        # silently fails to fire for advertisements that HA's
+        # bluetooth subsystem clearly receives via the same matchers
+        # used by the config_flow's discovery callback. Confirmed in
+        # production: 600 s waits timed out while multiple
+        # advertisements arrived in-window from a mix of passive-only
+        # and active ESPHome BT proxies. ``ScanningMode.PASSIVE`` here
+        # is a hint to HA about scanner-mode preference for THIS
+        # callback registration — it does not restrict the callback
+        # to passive scanners only; advertisements from active
+        # scanners are still delivered.
         cancel = bluetooth.async_register_callback(
             self.hass,
             _on_advertisement,
-            BluetoothCallbackMatcher(address=address, connectable=True),
-            BluetoothScanningMode.ACTIVE,
+            BluetoothCallbackMatcher(address=address),
+            BluetoothScanningMode.PASSIVE,
         )
         try:
             try:

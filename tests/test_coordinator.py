@@ -686,6 +686,53 @@ async def test_wait_for_fresh_advertisement_timeout_raises(
             await coordinator._wait_for_fresh_advertisement()
 
 
+async def test_wait_for_fresh_advertisement_log_includes_scanner_details(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The 'Advertisement received' INFO log includes source/rssi/connectable.
+
+    Regression test for v0.1.3: the callback now logs which scanner
+    delivered the advert (``source``), its RSSI, and whether the
+    scanner is connectable-eligible — so users debugging connection
+    issues against mixed passive/active BT proxy fleets can see which
+    proxy caught the advert. The matcher is also relaxed to
+    address-only, but verifying log content is the cheapest faithful
+    regression assertion: if the registered matcher were still
+    ``connectable=True`` against a passive-source advert, the
+    callback would never fire and the log line would never emit.
+    """
+    _, coordinator = await _setup(hass)
+    fake_device = MagicMock(spec=BLEDevice)
+
+    service_info = MagicMock()
+    service_info.source = "AA:BB:CC:DD:EE:FF"
+    service_info.rssi = -72
+    service_info.connectable = False  # advert came in via passive-only scanner
+
+    def _capture_register(_hass, cb, _matcher, _mode):
+        hass.loop.call_soon(cb, service_info, MagicMock())
+        return MagicMock()
+
+    with patch(
+        "custom_components.atorch_ble.coordinator.bluetooth.async_ble_device_from_address",
+        side_effect=[None, fake_device],
+    ), patch(
+        "custom_components.atorch_ble.coordinator.bluetooth.async_register_callback",
+        side_effect=_capture_register,
+    ), caplog.at_level(logging.INFO, logger="custom_components.atorch_ble.coordinator"):
+        result = await coordinator._wait_for_fresh_advertisement()
+
+    assert result is fake_device
+    advert_lines = [
+        r.getMessage() for r in caplog.records if "Advertisement received" in r.message
+    ]
+    assert len(advert_lines) == 1
+    line = advert_lines[0]
+    assert "source=AA:BB:CC:DD:EE:FF" in line
+    assert "rssi=-72" in line
+    assert "connectable=False" in line
+
+
 async def test_notification_callback_valid_frame(
     hass: HomeAssistant, build_j7c_frame
 ) -> None:

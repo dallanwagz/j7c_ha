@@ -55,9 +55,11 @@ RECONNECT_MAX_BACKOFF_SECONDS = 30.0
 # Upper bound on how long the coordinator will block waiting for a fresh
 # BLE advertisement from the meter before treating it as a connect
 # failure. Some J7-C firmware variants advertise every several minutes
-# when idle, so this needs to be substantially larger than HA's
-# connectable-registry freshness window (~90 s).
-ADVERTISEMENT_WAIT_TIMEOUT_SECONDS = 600
+# when idle (observed ~10 minutes between adverts on the user's unit),
+# so this needs to be substantially larger than HA's connectable-registry
+# freshness window (~90 s) AND wide enough to comfortably catch the next
+# advertisement cycle on slow-advertising firmware variants.
+ADVERTISEMENT_WAIT_TIMEOUT_SECONDS = 900  # 15 minutes
 
 # One-shot polled-cycle notification wait timeout.
 POLLED_NOTIFICATION_TIMEOUT_SECONDS = 5.0

@@ -10,6 +10,15 @@ Releases are cut by pushing a `vMAJOR.MINOR.PATCH` tag; the
 `custom_components/atorch_ble/` into `atorch_ble.zip` and attaches it
 to the GitHub Release.
 
+## [0.1.3] - 2026-05-19
+
+### Fixed
+- Bluetooth advertisement-wait callback now actually fires on production HA installations. The previous matcher (`address` + `connectable=True` + `BluetoothScanningMode.ACTIVE`) silently failed to fire for advertisements that HA's bluetooth subsystem clearly received via the same matchers used by the config_flow's discovery callback — confirmed in production with the J7-C against a mix of passive-only and active ESPHome BT proxies, where 600 s waits timed out while multiple in-window advertisements arrived. Matcher relaxed to `address`-only with `BluetoothScanningMode.PASSIVE` (a scanner-mode hint, not a hard filter), and the connectable-eligibility check now happens AFTER the wait via the existing `async_ble_device_from_address(..., connectable=True)` lookup — the same check the consumer would do anyway. Advertisements seen only by passive-only scanners produce a `None` lookup and loop back into another wait, exactly like a connect failure.
+
+### Changed
+- `ADVERTISEMENT_WAIT_TIMEOUT_SECONDS` raised from 600 s to 900 s (15 minutes) so the wait comfortably catches the next advertisement cycle on slow-advertising firmware variants. The user's J7-C was observed advertising roughly every 10 minutes when idle, which was just on the edge of the previous 600 s budget.
+- "Advertisement received" INFO log now includes `source`, `rssi`, and `connectable` fields so users debugging connection issues can see which scanner caught the advert and whether it was a connectable-eligible observation.
+
 ## [0.1.2] - 2026-05-19
 
 ### Fixed
