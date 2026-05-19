@@ -57,8 +57,3 @@ async def async_unload_entry(hass: HomeAssistant, entry: AtorchBleConfigEntry) -
     if coordinator is not None:
         await coordinator.async_unload()
     return unload_ok
-
-
-async def async_remove_entry(hass: HomeAssistant, entry: AtorchBleConfigEntry) -> None:
-    """Remove a config entry."""
-    return None

@@ -20,7 +20,6 @@ the config-flow and options-flow suites need:
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest

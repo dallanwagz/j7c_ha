@@ -62,3 +62,13 @@ ACK_UNSUPPORTED_KEY = "acknowledged_unsupported_packet_types"
 # Repair issue IDs / translation keys.
 ISSUE_CANNOT_CONNECT = "cannot_connect_after_setup"
 ISSUE_UNSUPPORTED_PACKET_TYPE_PREFIX = "unsupported_packet_type_0x"
+
+# Closed set of coordinator connection_state values. Source of truth for
+# the sensor enum options, diagnostics legend, and test expectations.
+CONNECTION_STATES: tuple[str, ...] = (
+    "connected",
+    "polling",
+    "disconnected",
+    "reconnecting",
+    "failed_after_setup",
+)

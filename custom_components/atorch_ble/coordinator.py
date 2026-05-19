@@ -79,7 +79,6 @@ from .const import (
     ISSUE_CANNOT_CONNECT,
     ISSUE_UNSUPPORTED_PACKET_TYPE_PREFIX,
     MODE_PERSISTENT,
-    MODE_POLLED,
     PACKET_TYPE_TO_MODEL,
     POLLED_NOTIFICATION_TIMEOUT_SECONDS,
     RECONNECT_INITIAL_BACKOFF_SECONDS,
@@ -93,12 +92,6 @@ _LOGGER = logging.getLogger(__name__)
 _BUCKET_SECONDS = 30
 _BUCKET_COUNT = 10
 _WINDOW_SECONDS = _BUCKET_SECONDS * _BUCKET_COUNT  # 300
-
-# Closed set of connection_state values (used in diagnostics legend).
-ConnectionState = str
-_VALID_STATES = frozenset(
-    {"connected", "polling", "disconnected", "reconnecting", "failed_after_setup"}
-)
 
 # Packet type successfully decoded by the J7-C path. The parser only
 # yields UsbMeterReading for type 0x03 today; harden against future
@@ -166,7 +159,7 @@ class AtorchBleCoordinator(
         )
 
         # Connection-state machine.
-        self._connection_state: ConnectionState = (
+        self._connection_state: str = (
             "reconnecting" if self._connection_mode == MODE_PERSISTENT else "disconnected"
         )
 
@@ -239,7 +232,7 @@ class AtorchBleCoordinator(
     # ------------------------------------------------------------------
 
     @property
-    def connection_state(self) -> ConnectionState:
+    def connection_state(self) -> str:
         """Return the current connection-state machine value."""
         return self._connection_state
 

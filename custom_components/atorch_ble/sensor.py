@@ -44,7 +44,7 @@ from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util.dt import utcnow
 
-from .const import DOMAIN
+from .const import CONNECTION_STATES, DOMAIN
 from .coordinator import AtorchBleCoordinator, AtorchBleData
 
 _LOGGER = logging.getLogger(__name__)
@@ -195,13 +195,7 @@ DESCRIPTIONS: tuple[AtorchBleSensorEntityDescription, ...] = (
         key="connection_state",
         translation_key="connection_state",
         device_class=SensorDeviceClass.ENUM,
-        options=[
-            "connected",
-            "polling",
-            "disconnected",
-            "reconnecting",
-            "failed_after_setup",
-        ],
+        options=list(CONNECTION_STATES),
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
         value_fn_coordinator=lambda coord: coord.connection_state,

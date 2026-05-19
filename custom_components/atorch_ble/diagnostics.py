@@ -8,7 +8,8 @@ payload is a JSON-serializable dict surfacing:
 * a partial-MAC-masked ``device`` block (form ``AA:BB:**:**:**:FF``);
 * a redacted ``config_entry`` block (data + options);
 * a ``coordinator_state`` snapshot (mode, last_seen, connection_state,
-  retry counters, parser_error_count, parser_error_rate_5m, the persisted
+  consecutive_connect_failures, failures_since_last_raise,
+  parser_error_count, parser_error_rate_5m, the persisted
   ``acknowledged_unsupported_packet_types`` set);
 * a ``last_reading`` block (parsed ``UsbMeterReading`` fields) or
   ``None``;
@@ -35,8 +36,10 @@ from homeassistant.core import HomeAssistant
 from .const import ACK_UNSUPPORTED_KEY, DOMAIN
 
 # UX-locked diagnostics-legend text. Keys must exactly match the closed
-# set of connection_state strings used by the coordinator
-# (see coordinator._VALID_STATES); values are verbatim per PROJECT_CONTEXT.md.
+# set of connection_state strings used by the coordinator (see
+# const.CONNECTION_STATES); values are verbatim per PROJECT_CONTEXT.md
+# and kept as literal keys here because each value is a distinct
+# human-readable description.
 _CONNECTION_STATE_LEGEND: dict[str, str] = {
     "connected": (
         "Persistent connection mode: actively subscribed to notifications."
@@ -196,9 +199,6 @@ async def async_get_config_entry_diagnostics(
             "mode": getattr(coordinator, "_connection_mode", None),
             "connection_state": getattr(coordinator, "connection_state", None),
             "last_seen": last_seen.isoformat() if last_seen is not None else None,
-            "retry_count": getattr(
-                coordinator, "_consecutive_connect_failures", None
-            ),
             "consecutive_connect_failures": getattr(
                 coordinator, "_consecutive_connect_failures", None
             ),
@@ -221,7 +221,6 @@ async def async_get_config_entry_diagnostics(
             "mode": None,
             "connection_state": None,
             "last_seen": None,
-            "retry_count": None,
             "consecutive_connect_failures": None,
             "failures_since_last_raise": None,
             "parser_error_count": None,

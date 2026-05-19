@@ -22,7 +22,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import EntityCategory
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.atorch_ble.const import DOMAIN
+from custom_components.atorch_ble.const import CONNECTION_STATES, DOMAIN
 from custom_components.atorch_ble.coordinator import AtorchBleData
 
 from .conftest import TEST_MAC_NORMALIZED, TEST_TITLE
@@ -315,12 +315,6 @@ async def test_connection_state_enum_options(hass: HomeAssistant) -> None:
 
     by_key = {d.key: d for d in DESCRIPTIONS}
     desc = by_key["connection_state"]
-    assert set(desc.options) == {
-        "connected",
-        "polling",
-        "disconnected",
-        "reconnecting",
-        "failed_after_setup",
-    }
+    assert set(desc.options) == set(CONNECTION_STATES)
     assert desc.entity_category == EntityCategory.DIAGNOSTIC
     assert desc.entity_registry_enabled_default is False

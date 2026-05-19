@@ -15,7 +15,7 @@ from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.atorch_ble.const import DOMAIN
+from custom_components.atorch_ble.const import CONNECTION_STATES, DOMAIN
 from custom_components.atorch_ble.diagnostics import (
     async_get_config_entry_diagnostics,
 )
@@ -52,13 +52,7 @@ async def test_diagnostics_legend_present(hass: HomeAssistant) -> None:
     _, payload = await _setup_and_get_diagnostics(hass)
 
     legend = payload["_legend"]["connection_state"]
-    expected_keys = {
-        "connected",
-        "polling",
-        "disconnected",
-        "reconnecting",
-        "failed_after_setup",
-    }
+    expected_keys = set(CONNECTION_STATES)
     assert set(legend.keys()) == expected_keys
     # Each entry is a non-empty human-readable string.
     for key in expected_keys:
