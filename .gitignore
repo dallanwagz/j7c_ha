@@ -45,3 +45,6 @@ Thumbs.db
 htmlcov/
 .mypy_cache/
 .ruff_cache/
+
+# Orchestrator state
+PROJECT_PROGRESS.md
