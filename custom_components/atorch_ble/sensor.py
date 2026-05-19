@@ -16,8 +16,10 @@ Exactly one of the two is set per description.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import timedelta
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -40,9 +42,12 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util.dt import utcnow
 
 from .const import DOMAIN
 from .coordinator import AtorchBleCoordinator, AtorchBleData
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -231,6 +236,11 @@ class AtorchBleSensor(CoordinatorEntity[AtorchBleCoordinator], SensorEntity):
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, coordinator.mac_normalized)},
         )
+        # Tracks the previous availability value so we can emit a single
+        # DEBUG line on each True -> False transition (per ticket #12).
+        # Seeded ``True`` so the first stale read produces one log line;
+        # value_fn_coordinator-backed entities never flip and never log.
+        self._available_prev: bool = True
 
     @property
     def native_value(self) -> StateType:
@@ -255,18 +265,39 @@ class AtorchBleSensor(CoordinatorEntity[AtorchBleCoordinator], SensorEntity):
 
     @property
     def available(self) -> bool:
-        """Return availability per the implementer-locked rule.
+        """Return availability per the locked freshness-only rule (#12).
 
-        Measurement sensors (``value_fn``-based) defer to the
-        framework's freshness-based availability — ``batch-3/03`` owns
-        the full semantic (last_seen vs 2x expected cadence) and will
-        refine this further. Diagnostic sensors
-        (``value_fn_coordinator``-based) report ``True`` unconditionally
-        so the user can see them when measurement sensors go stale.
+        Diagnostic ``value_fn_coordinator``-backed entities (notably the
+        ``connection_state`` sensor) report ``True`` unconditionally so
+        the user can see *why* measurement sensors are unavailable.
+
+        All other (``value_fn``-backed) measurement entities are
+        available iff ``coordinator.last_seen`` is within a freshness
+        window of ``2 * coordinator.expected_cadence_seconds``. The rule
+        is freshness-alone — ``coordinator.connection_state`` is
+        intentionally NOT consulted because polled-mode sensors spend
+        the bulk of each cadence in the ``"disconnected"`` idle state
+        and would otherwise be permanently unavailable. ``super().available``
+        is also not consulted: freshness is the authoritative signal.
         """
         if self.entity_description.value_fn_coordinator is not None:
             return True
-        return super().available
+        last_seen = self.coordinator.last_seen
+        if last_seen is None:
+            available = False
+        else:
+            window = timedelta(
+                seconds=2 * self.coordinator.expected_cadence_seconds
+            )
+            available = (utcnow() - last_seen) <= window
+        # Emit one DEBUG line per True -> False transition; never log
+        # the reverse direction to keep logs quiet on healthy reconnects.
+        if self._available_prev and not available:
+            _LOGGER.debug(
+                "entity %s became unavailable (stale data)", self.entity_id
+            )
+        self._available_prev = available
+        return available
 
 
 async def async_setup_entry(
