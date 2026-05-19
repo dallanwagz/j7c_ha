@@ -16,16 +16,19 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "homeassistant",
-    "pytest-homeassistant-custom-component",
+    # Pinned to a known-good triple. pytest-homeassistant-custom-component
+    # always pins exactly one homeassistant version; matching it here
+    # short-circuits pip's resolver before it can backtrack through old
+    # releases that pull pre-PEP-517 sdists (numpy 1.23, aiohttp 3.x).
+    "homeassistant==2026.5.2",
+    "pytest-homeassistant-custom-component==0.13.331",
     "pytest-cov",
     "ruff",
     "mypy",
     # Transitive deps pulled in by homeassistant.components.bluetooth ->
     # homeassistant.components.usb at import time but not declared as
     # hard requirements of the `homeassistant` PyPI package. Pinned to
-    # the versions HA 2026.5.2's manifests declare so pip doesn't
-    # backtrack into pre-PEP-517 numpy sdists.
+    # the versions HA 2026.5.2's component manifests declare.
     "serialx==1.7.3",
     "aiousbwatcher==1.1.2",
     "aioesphomeapi==44.24.1",
