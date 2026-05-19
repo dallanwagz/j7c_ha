@@ -98,6 +98,57 @@ async def test_initial_connection_state_polled_is_disconnected(
 
 
 # ---------------------------------------------------------------------------
+# Connection-state setter — notifies listeners on change, idempotent on no-op
+# ---------------------------------------------------------------------------
+
+
+async def test_set_connection_state_notifies_listeners_on_change(
+    hass: HomeAssistant,
+) -> None:
+    """_set_connection_state fires listeners so the diagnostic sensor refreshes.
+
+    Direct assignment to ``_connection_state`` previously left the
+    ``connection_state`` sensor stuck on its first read because nothing
+    triggered an HA-side state-write. Routing every transition through
+    the setter must call back into the CoordinatorEntity listener
+    registry.
+    """
+    _, coordinator = await _setup(
+        hass, options={CONF_CONNECTION_MODE: MODE_PERSISTENT}
+    )
+    calls: list[None] = []
+    coordinator.async_add_listener(lambda: calls.append(None))
+
+    coordinator._set_connection_state("connected")
+    assert coordinator.connection_state == "connected"
+    assert len(calls) == 1
+
+    coordinator._set_connection_state("disconnected")
+    assert coordinator.connection_state == "disconnected"
+    assert len(calls) == 2
+
+
+async def test_set_connection_state_no_op_does_not_notify(
+    hass: HomeAssistant,
+) -> None:
+    """Re-asserting the same state must not fire listeners.
+
+    Steady-state operation (e.g., persistent runner heartbeat re-entry
+    after a transient hiccup) should not produce spurious listener
+    storms.
+    """
+    _, coordinator = await _setup(
+        hass, options={CONF_CONNECTION_MODE: MODE_PERSISTENT}
+    )
+    calls: list[None] = []
+    coordinator.async_add_listener(lambda: calls.append(None))
+
+    # Initial state is already "reconnecting"; no-op set should be silent.
+    coordinator._set_connection_state("reconnecting")
+    assert len(calls) == 0
+
+
+# ---------------------------------------------------------------------------
 # Parser error-rate rolling-window
 # ---------------------------------------------------------------------------
 

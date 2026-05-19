@@ -10,6 +10,15 @@ Releases are cut by pushing a `vMAJOR.MINOR.PATCH` tag; the
 `custom_components/atorch_ble/` into `atorch_ble.zip` and attaches it
 to the GitHub Release.
 
+## [0.1.2] - 2026-05-19
+
+### Fixed
+- `connection_state` diagnostic sensor now refreshes live on every state transition. Previously the value was assigned via direct attribute write that bypassed the CoordinatorEntity listener registry, so the sensor cached its first read forever — making real-time troubleshooting impossible. Every state transition now flows through a `_set_connection_state` setter that notifies listeners on change (and is idempotent on no-op transitions to avoid spurious updates).
+- Polled mode no longer reports `connection_state == "polling"` while it is actually waiting for a BLE advertisement (a wait that can take up to 600s on slow-advertising firmware). The state now transitions through `disconnected` → (advertisement arrives) → `polling` → (connection established) → `connected` → `disconnected` between polls, so the UI accurately reflects what the runner is doing.
+
+### Changed
+- Critical connection-lifecycle log lines promoted from DEBUG to INFO so they are visible in HA's default WARN-or-above log viewer without enabling debug logging: advertisement-wait start, advertisement received, GATT-connect attempt + success, notify-subscribe success, first notification per session (throttled), and disconnect. Per-frame parse logs and intra-cycle chatter remain at DEBUG.
+
 ## [0.1.1] - 2026-05-19
 
 ### Fixed

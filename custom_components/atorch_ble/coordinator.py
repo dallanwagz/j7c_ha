@@ -220,6 +220,12 @@ class AtorchBleCoordinator(
         self._runner_task: asyncio.Task[None] | None = None
         self._client: BleakClient | None = None
 
+        # First-notification-per-session log gate. Reset at the start of
+        # each connection in both persistent and polled mode so the
+        # "data flowing" INFO line emits exactly once per connection
+        # attempt that successfully receives a frame.
+        self._first_notification_logged: bool = False
+
         # Resolved issue_tracker URL — cached after first lookup.
         self._issue_url: str | None = None
 
@@ -372,6 +378,23 @@ class AtorchBleCoordinator(
         for cb in list(self._listeners):
             cb()
 
+    @callback
+    def _set_connection_state(self, value: str) -> None:
+        """Update the connection-state machine value and notify listeners.
+
+        Direct assignment to ``self._connection_state`` does not trigger
+        any HA-side state-write, so the ``connection_state`` diagnostic
+        sensor (whose ``value_fn_coordinator`` reads this attribute on
+        every render) would otherwise cache its first value forever.
+        Funnelling every transition through this setter guarantees the
+        sensor refreshes live. Idempotent on no-op transitions to avoid
+        spurious listener storms during steady-state operation.
+        """
+        if self._connection_state == value:
+            return
+        self._connection_state = value
+        self._async_notify_listeners()
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -487,7 +510,7 @@ class AtorchBleCoordinator(
             self._connection_mode = new_mode
             # Drain old runner before starting new one — never two alive.
             await self._stop_runner()
-            self._connection_state = (
+            self._set_connection_state(
                 "reconnecting" if new_mode == MODE_PERSISTENT else "disconnected"
             )
             if self._started:
@@ -538,7 +561,7 @@ class AtorchBleCoordinator(
         backoff = RECONNECT_INITIAL_BACKOFF_SECONDS
         try:
             while True:
-                self._connection_state = "reconnecting"
+                self._set_connection_state("reconnecting")
                 try:
                     await self._connect_and_subscribe_persistent()
                 except asyncio.CancelledError:
@@ -569,21 +592,23 @@ class AtorchBleCoordinator(
                     self._client = None
 
                 if self._connection_state != "failed_after_setup":
-                    self._connection_state = "disconnected"
+                    self._set_connection_state("disconnected")
                 _LOGGER.info(
-                    "BLE disconnected (mac=%s); will reconnect", self.mac_normalized
+                    "Disconnected from %s; will reconnect", self.mac_normalized
                 )
         except asyncio.CancelledError:
             return
 
     async def _connect_and_subscribe_persistent(self) -> None:  # pragma: no cover - requires real bleak loop; covered by smoke test
         ble_device = await self._wait_for_fresh_advertisement()
+        _LOGGER.info("Attempting GATT connection to %s", self.mac_normalized)
         client = await establish_connection(
             BleakClientWithServiceCache,
             ble_device,
             f"{DOMAIN}-{self.mac_normalized}",
             disconnected_callback=self._on_disconnected_callback,
         )
+        _LOGGER.info("GATT connection established to %s", self.mac_normalized)
         try:
             await client.start_notify(
                 CHARACTERISTIC_UUID, self._notification_callback
@@ -592,8 +617,14 @@ class AtorchBleCoordinator(
             with contextlib.suppress(Exception):
                 await client.disconnect()
             raise
+        _LOGGER.info("Subscribed to notifications on %s", self.mac_normalized)
         self._client = client
-        self._connection_state = "connected"
+        # Reset the per-session "first notification" log gate so the
+        # next notification logs at INFO once. Set BEFORE the state
+        # transition so a notification arriving during the listener
+        # storm of the state change still logs the first-frame line.
+        self._first_notification_logged = False
+        self._set_connection_state("connected")
 
     @callback
     def _on_disconnected_callback(self, _client: BleakClient) -> None:
@@ -609,7 +640,14 @@ class AtorchBleCoordinator(
         backoff = RECONNECT_INITIAL_BACKOFF_SECONDS
         try:
             while True:
-                self._connection_state = "polling"
+                # Stay "disconnected" while we wait for an advertisement
+                # — the wait can take up to ADVERTISEMENT_WAIT_TIMEOUT_SECONDS
+                # (default 600s) and reporting "polling" during that
+                # window misleads users into thinking the meter is
+                # connected. Transition to "polling" only once we have
+                # a BLEDevice and are actively trying to establish the
+                # GATT connection.
+                self._set_connection_state("disconnected")
                 got_reading = asyncio.Event()
 
                 def _one_shot_callback(
@@ -621,14 +659,25 @@ class AtorchBleCoordinator(
                 client: BleakClient | None = None
                 try:
                     ble_device = await self._wait_for_fresh_advertisement()
+                    self._set_connection_state("polling")
+                    self._first_notification_logged = False
+                    _LOGGER.info(
+                        "Attempting GATT connection to %s", self.mac_normalized
+                    )
                     client = await establish_connection(
                         BleakClientWithServiceCache,
                         ble_device,
                         f"{DOMAIN}-{self.mac_normalized}",
                     )
+                    _LOGGER.info(
+                        "GATT connection established to %s", self.mac_normalized
+                    )
                     self._client = client
                     await client.start_notify(
                         CHARACTERISTIC_UUID, _one_shot_callback
+                    )
+                    _LOGGER.info(
+                        "Subscribed to notifications on %s", self.mac_normalized
                     )
                     try:
                         await asyncio.wait_for(
@@ -654,9 +703,12 @@ class AtorchBleCoordinator(
                     if client is not None:
                         with contextlib.suppress(Exception):
                             await client.disconnect()
+                        _LOGGER.info(
+                            "Disconnected from %s", self.mac_normalized
+                        )
                     self._client = None
                     if self._connection_state != "failed_after_setup":
-                        self._connection_state = "disconnected"
+                        self._set_connection_state("disconnected")
 
                 # Sleep until next cycle. On failure, prefer the longer
                 # of (backoff, poll_interval) so we don't hammer.
@@ -728,6 +780,7 @@ class AtorchBleCoordinator(
         # Slow path: arm callback before we await so we cannot miss an
         # advertisement that lands between the failed fast-path lookup
         # and the registration.
+        _LOGGER.info("Waiting for advertisement from %s", address)
         arrived = asyncio.Event()
 
         @callback
@@ -735,6 +788,7 @@ class AtorchBleCoordinator(
             _service_info: BluetoothServiceInfoBleak,
             _change: BluetoothChange,
         ) -> None:
+            _LOGGER.info("Advertisement received for %s", address)
             arrived.set()
 
         cancel = bluetooth.async_register_callback(
@@ -781,6 +835,16 @@ class AtorchBleCoordinator(
         """bleak notification callback — sync; schedules async work on hass."""
         now = time.monotonic()
         self._increment_bucket(now, notifs=1, errors=0)
+        # Once-per-session "data flowing" INFO log. Throttled by a flag
+        # the runner clears at the start of each connection attempt; the
+        # per-frame decoded-reading log below stays at DEBUG because at
+        # ~1Hz it would be too chatty for the default log viewer.
+        if not self._first_notification_logged:
+            self._first_notification_logged = True
+            _LOGGER.info(
+                "First notification received from %s, data flowing",
+                self.mac_normalized,
+            )
         try:
             readings = self._parser.feed(bytes(data))
         except UnsupportedPacketType as exc:
@@ -857,7 +921,7 @@ class AtorchBleCoordinator(
         self._consecutive_connect_failures = 0
         self._failures_since_last_raise = 0
         self._warned_about_current_failure_streak = False
-        self._connection_state = "connected"
+        self._set_connection_state("connected")
         if self._cannot_connect_issue_raised:
             ir.async_delete_issue(self.hass, DOMAIN, ISSUE_CANNOT_CONNECT)
             self._cannot_connect_issue_raised = False
@@ -914,7 +978,7 @@ class AtorchBleCoordinator(
         )
         self._cannot_connect_issue_raised = True
         self._failures_since_last_raise = 0
-        self._connection_state = "failed_after_setup"
+        self._set_connection_state("failed_after_setup")
         _LOGGER.warning(
             "Raised cannot_connect_after_setup repair (mac=%s, name=%s)",
             self.mac_normalized,
