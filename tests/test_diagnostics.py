@@ -121,3 +121,102 @@ async def test_diagnostics_coordinator_state_present(
     assert isinstance(state["parser_error_rate_5m"], float)
     # acknowledged_unsupported_packet_types is a (possibly empty) list.
     assert isinstance(state["acknowledged_unsupported_packet_types"], list)
+
+
+async def test_diagnostics_partial_mask_edge_cases() -> None:
+    """``_partial_mask_mac`` handles None, empty, and malformed inputs."""
+    from custom_components.atorch_ble.diagnostics import _partial_mask_mac
+
+    assert _partial_mask_mac(None) is None
+    assert _partial_mask_mac("") == ""
+    assert _partial_mask_mac("not-a-mac") == "**"
+    assert _partial_mask_mac("aa:bb:cc:dd:ee:ff") == "aa:bb:**:**:**:ff"
+
+
+async def test_diagnostics_project_last_reading_non_dataclass() -> None:
+    """The reading-projection helper reflects over plain objects too."""
+    from custom_components.atorch_ble.diagnostics import _project_last_reading
+
+    assert _project_last_reading(None) is None
+
+    class _Plain:
+        """Non-dataclass reading-shaped object."""
+
+        voltage_v = 5.0
+        current_a = 1.0
+
+    out = _project_last_reading(_Plain())
+    assert out["voltage_v"] == 5.0
+    assert out["current_a"] == 1.0
+
+
+async def test_diagnostics_bluetooth_sources_api_unavailable(
+    hass: HomeAssistant,
+) -> None:
+    """``_project_bluetooth_sources`` returns [] when the HA API is missing."""
+    from custom_components.atorch_ble import diagnostics as diag
+
+    with patch.object(diag.bluetooth, "async_scanner_devices_by_address", None):
+        assert diag._project_bluetooth_sources(hass, "anything") == []
+
+
+async def test_diagnostics_bluetooth_sources_with_entries(
+    hass: HomeAssistant,
+) -> None:
+    """Per-source RSSI + time_since_last_seen projection populates the list."""
+    from custom_components.atorch_ble import diagnostics as diag
+
+    fake_scanner = type("Scanner", (), {"source": "local"})()
+    fake_adv = type("Adv", (), {"rssi": -55})()
+    fake_sd = type(
+        "SD",
+        (),
+        {
+            "scanner": fake_scanner,
+            "advertisement": fake_adv,
+            "time_since_last_seen": 1.25,
+        },
+    )()
+
+    with patch.object(
+        diag.bluetooth,
+        "async_scanner_devices_by_address",
+        return_value=[fake_sd],
+    ):
+        out = diag._project_bluetooth_sources(hass, "AA:BB:CC:DD:EE:FF")
+    assert out == [
+        {"source": "local", "rssi": -55, "time_since_last_seen": 1.25}
+    ]
+
+
+async def test_diagnostics_bluetooth_sources_api_raises(
+    hass: HomeAssistant,
+) -> None:
+    """If the API raises, _project_bluetooth_sources returns []."""
+    from custom_components.atorch_ble import diagnostics as diag
+
+    with patch.object(
+        diag.bluetooth,
+        "async_scanner_devices_by_address",
+        side_effect=RuntimeError("boom"),
+    ):
+        assert diag._project_bluetooth_sources(hass, "anything") == []
+
+
+async def test_diagnostics_no_coordinator_or_device(hass: HomeAssistant) -> None:
+    """Calling diagnostics for an entry not in hass.data still succeeds.
+
+    Exercises the no-coordinator + no-device-registry-entry fallback
+    branches in async_get_config_entry_diagnostics.
+    """
+    entry = _make_entry(hass)
+    # Note: entry is added to hass but NOT set up — no coordinator
+    # registered, no device created. The diagnostics call must still
+    # produce a JSON-safe dict via the fallback paths.
+    payload = await async_get_config_entry_diagnostics(hass, entry)
+    assert payload["coordinator_state"]["mode"] is None
+    assert payload["coordinator_state"]["connection_state"] is None
+    assert payload["last_reading"] is None
+    # Fallback device block masks the address.
+    assert payload["device"]["model"] is None
+    assert payload["device"]["manufacturer"] == "Atorch"

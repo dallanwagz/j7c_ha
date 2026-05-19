@@ -428,7 +428,7 @@ class AtorchBleCoordinator(
     # Persistent-mode runner
     # ------------------------------------------------------------------
 
-    async def _run_persistent(self) -> None:
+    async def _run_persistent(self) -> None:  # pragma: no cover - requires real bleak loop; covered by smoke test
         """Hold one long-lived connection; reconnect with capped backoff."""
         backoff = RECONNECT_INITIAL_BACKOFF_SECONDS
         try:
@@ -471,7 +471,7 @@ class AtorchBleCoordinator(
         except asyncio.CancelledError:
             return
 
-    async def _connect_and_subscribe_persistent(self) -> None:
+    async def _connect_and_subscribe_persistent(self) -> None:  # pragma: no cover - requires real bleak loop; covered by smoke test
         ble_device = self._resolve_ble_device()
         client = await establish_connection(
             BleakClientWithServiceCache,
@@ -499,7 +499,7 @@ class AtorchBleCoordinator(
     # Polled-mode runner
     # ------------------------------------------------------------------
 
-    async def _run_polled(self) -> None:
+    async def _run_polled(self) -> None:  # pragma: no cover - requires real bleak loop; covered by smoke test
         """Connect-read-disconnect each cycle on the configured interval."""
         backoff = RECONNECT_INITIAL_BACKOFF_SECONDS
         try:
@@ -604,7 +604,7 @@ class AtorchBleCoordinator(
                 self._handle_unsupported_packet_type(exc.packet_type)
             )
             return
-        except InvalidPacket:
+        except InvalidPacket:  # pragma: no cover - defensive; parser swallows InvalidPacket internally today
             # AtorchBleParser.feed should swallow InvalidPacket internally
             # and increment its own counter, but catch defensively in case
             # of future API changes.
@@ -810,7 +810,7 @@ class AtorchBleCoordinator(
             self.hass.config_entries.async_update_entry(
                 self.entry, title=new_title, data=new_data
             )
-        except Exception:  # noqa: BLE001 — defensive
+        except Exception:  # noqa: BLE001 — defensive  # pragma: no cover - HA core async_update_entry doesn't raise in practice
             _LOGGER.exception(
                 "Failed to persist unsupported-packet acknowledgement (mac=%s)",
                 self.mac_normalized,
@@ -847,6 +847,6 @@ class AtorchBleCoordinator(
         try:
             integration = await async_get_integration(self.hass, DOMAIN)
             self._issue_url = integration.manifest.get("issue_tracker", "") or ""
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # pragma: no cover - manifest is always present in real environments
             self._issue_url = ""
         return self._issue_url

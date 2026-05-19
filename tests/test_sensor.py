@@ -195,6 +195,71 @@ async def test_device_class_correct(hass: HomeAssistant) -> None:
     assert by_key["capacity"].device_class is None
 
 
+async def test_entity_native_value_and_availability(
+    hass: HomeAssistant,
+) -> None:
+    """AtorchBleSensor.native_value / available work against the coordinator.
+
+    Exercises the entity class directly (sidestepping HA's state machine)
+    so we cover the freshness-window availability rule, the value_fn
+    branch, the value_fn_coordinator diagnostic branch, and the
+    transition-debug log path on becoming unavailable.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from custom_components.atorch_ble.sensor import (
+        DESCRIPTIONS,
+        AtorchBleSensor,
+    )
+
+    entry = await _setup(hass)
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+
+    by_key = {d.key: d for d in DESCRIPTIONS}
+    voltage_sensor = AtorchBleSensor(coordinator, by_key["voltage"])
+    conn_state_sensor = AtorchBleSensor(coordinator, by_key["connection_state"])
+
+    # Seed coordinator.data — the ActiveBluetoothProcessorCoordinator base
+    # class does not auto-create this attribute the way DataUpdateCoordinator
+    # does, so the AtorchBleSensor.native_value access path needs it
+    # explicitly. None means "no reading yet".
+    coordinator.data = None
+
+    # No reading yet -> voltage sensor unavailable (returns None / False).
+    assert voltage_sensor.native_value is None
+    assert voltage_sensor.available is False
+    # Diagnostic sensor is always available; reports the connection_state.
+    assert conn_state_sensor.available is True
+    assert conn_state_sensor.native_value == coordinator.connection_state
+
+    # Publish a reading + recent last_seen -> voltage sensor available.
+    reading = UsbMeterReading(
+        voltage_v=5.0,
+        current_a=1.0,
+        capacity_mah=10,
+        energy_wh=1.0,
+        voltage_dplus_v=2.5,
+        voltage_dminus_v=2.5,
+        temperature_c=20,
+        duration_s=10,
+    )
+    coordinator._last_reading = reading
+    coordinator._last_seen = datetime.now(timezone.utc)
+    # Push the snapshot through the base coordinator's data setter
+    # by patching the underlying _data attribute so the entity's
+    # coordinator.data accessor sees the new snapshot. We avoid
+    # async_set_updated_data here because it fires entity-registration
+    # listener callbacks that the test isn't standing up.
+    snap = AtorchBleData(reading=reading, power_w=5.0)
+    coordinator.data = snap
+    assert voltage_sensor.native_value == 5.0
+    assert voltage_sensor.available is True
+
+    # Backdate last_seen well past the freshness window -> unavailable.
+    coordinator._last_seen = datetime.now(timezone.utc) - timedelta(hours=1)
+    assert voltage_sensor.available is False
+
+
 async def test_connection_state_enum_options(hass: HomeAssistant) -> None:
     """connection_state sensor exposes the closed-set options + DIAGNOSTIC category."""
     from custom_components.atorch_ble.sensor import DESCRIPTIONS

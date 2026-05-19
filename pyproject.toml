@@ -34,7 +34,7 @@ include = ["custom_components*"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = [
-    "--cov=custom_components.atorch_ble.config_flow",
+    "--cov=custom_components.atorch_ble",
     "--cov-report=term-missing",
     "--cov-fail-under=95",
 ]
