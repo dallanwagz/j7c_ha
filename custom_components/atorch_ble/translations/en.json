@@ -13,6 +13,30 @@
     }
   },
   "options": {
-    "step": {}
+    "step": {
+      "init": {
+        "title": "TODO: options init title",
+        "description": "TODO: options init description",
+        "data": {
+          "connection_mode": "TODO: connection_mode label",
+          "poll_interval_seconds": "TODO: poll_interval_seconds label"
+        },
+        "data_description": {
+          "connection_mode": "TODO: connection_mode help text",
+          "poll_interval_seconds": "TODO: poll_interval_seconds help text"
+        }
+      }
+    },
+    "error": {
+      "interval_out_of_range": "TODO: interval_out_of_range copy"
+    }
+  },
+  "selector": {
+    "connection_mode": {
+      "options": {
+        "persistent": "TODO: persistent label",
+        "polled": "TODO: polled label"
+      }
+    }
   }
 }
