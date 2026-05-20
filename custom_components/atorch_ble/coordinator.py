@@ -179,6 +179,12 @@ class AtorchBleCoordinator(
         self.entry = entry
         self.mac_normalized: str = format_mac(entry.data[CONF_ADDRESS])
 
+        # HA's bluetooth manager keys its device dictionaries by UPPERCASE
+        # address. Use this form for every bluetooth.async_* lookup. The
+        # lowercase mac_normalized stays for device-registry identifiers
+        # and entity unique_ids, which must not change.
+        self._ble_address = self.mac_normalized.upper()
+
         self._parser = AtorchBleParser()
 
         # Mode + poll interval are read from options (with const defaults
@@ -736,9 +742,8 @@ class AtorchBleCoordinator(
         miss meters whose firmware advertises only every few minutes
         when idle.
         """
-        address = self.entry.data[CONF_ADDRESS]
         return bluetooth.async_ble_device_from_address(
-            self.hass, address, connectable=True
+            self.hass, self._ble_address, connectable=True
         )
 
     async def _wait_for_fresh_advertisement(self) -> BLEDevice:
@@ -777,16 +782,19 @@ class AtorchBleCoordinator(
         """
         address = self.entry.data[CONF_ADDRESS]
 
-        # Fast path. ``async_ble_device_from_address`` is case-insensitive
-        # internally in HA Core, so passing the lowercase ``address`` here
-        # is fine. Note the asymmetry with the slow-path callback below:
+        # Fast path. ``async_ble_device_from_address`` is NOT
+        # case-insensitive: HA's bluetooth manager keys its internal
+        # device-history dictionaries by UPPERCASE address and does a
+        # plain ``dict.get()`` with no normalization, so a lowercase
+        # address always misses. Pass the uppercase ``self._ble_address``.
+        # Note the related asymmetry with the slow-path callback below:
         # the callback matcher CANNOT be keyed on ``address`` because
         # ``BluetoothCallbackMatcher`` compares addresses case-sensitively
         # and HA represents advertisement addresses uppercase — hence the
         # service-uuid matcher + in-callback case-insensitive address
         # filter approach.
         ble_device = bluetooth.async_ble_device_from_address(
-            self.hass, address, connectable=True
+            self.hass, self._ble_address, connectable=True
         )
         if ble_device is not None:
             return ble_device
@@ -857,7 +865,7 @@ class AtorchBleCoordinator(
             cancel()
 
         ble_device = bluetooth.async_ble_device_from_address(
-            self.hass, address, connectable=True
+            self.hass, self._ble_address, connectable=True
         )
         if ble_device is None:
             # Advertisement was observed but the registry didn't catch

@@ -633,6 +633,45 @@ async def test_wait_for_fresh_advertisement_fast_path(
     mock_register.assert_not_called()
 
 
+async def test_async_ble_device_lookup_uses_uppercase_address(
+    hass: HomeAssistant,
+) -> None:
+    """``async_ble_device_from_address`` is always called with UPPERCASE.
+
+    Regression test for v0.1.5: HA's bluetooth manager keys its internal
+    device-history dictionaries by uppercase address and does a plain
+    ``dict.get()`` with no normalization. The coordinator stored a
+    lowercase ``format_mac()`` address, so every lookup missed and
+    returned ``None`` even right after a connectable advertisement was
+    received. The coordinator now keeps an uppercase ``_ble_address``
+    for all HA bluetooth-API lookups.
+    """
+    _, coordinator = await _setup(hass)
+    # The stored config-entry address is lowercase ...
+    assert coordinator.entry.data[CONF_ADDRESS] == TEST_MAC_NORMALIZED
+    # ... but the bluetooth-API lookup address is uppercase.
+    assert coordinator._ble_address == TEST_MAC_NORMALIZED.upper()
+    # The lowercase identifier form is untouched (device registry / unique_ids).
+    assert coordinator.mac_normalized == TEST_MAC_NORMALIZED
+
+    fake_device = MagicMock(spec=BLEDevice)
+    with patch(
+        "custom_components.atorch_ble.coordinator.bluetooth.async_ble_device_from_address",
+        return_value=fake_device,
+    ) as mock_lookup, patch(
+        "custom_components.atorch_ble.coordinator.bluetooth.async_register_callback"
+    ):
+        # Both the sync helper and the async wait must use the uppercase form.
+        coordinator._resolve_ble_device()
+        await coordinator._wait_for_fresh_advertisement()
+
+    assert mock_lookup.call_count == 2
+    for call in mock_lookup.call_args_list:
+        address_arg = call.args[1]
+        assert address_arg == TEST_MAC_NORMALIZED.upper()
+        assert address_arg == address_arg.upper()
+
+
 async def test_wait_for_fresh_advertisement_slow_path_arrival(
     hass: HomeAssistant,
 ) -> None:

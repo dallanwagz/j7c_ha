@@ -10,6 +10,11 @@ Releases are cut by pushing a `vMAJOR.MINOR.PATCH` tag; the
 `custom_components/atorch_ble/` into `atorch_ble.zip` and attaches it
 to the GitHub Release.
 
+## [0.1.5] - 2026-05-19
+
+### Fixed
+- `bluetooth.async_ble_device_from_address` lookups now pass an UPPERCASE address. HA's bluetooth manager keys its internal device-history dictionaries by uppercase address and does a plain `dict.get()` with no case normalization, so the coordinator's lowercase `format_mac()` address always missed and the lookup returned `None` — even immediately after a connectable advertisement was received, producing `BLE connection failed: Advertisement observed ... but BLEDevice still missing from HA bluetooth registry`. This was the second hiding spot of the same address-casing bug fixed in v0.1.4 for the callback matcher. The coordinator now keeps an uppercase `self._ble_address` for all HA bluetooth-API lookups, while the lowercase `mac_normalized` stays for device-registry identifiers and entity unique_ids (which must not change). The inaccurate "case-insensitive" comments claiming `async_ble_device_from_address` normalizes case have been corrected.
+
 ## [0.1.4] - 2026-05-19
 
 ### Fixed
