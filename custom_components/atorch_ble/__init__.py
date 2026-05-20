@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
+from homeassistant.const import CONF_ADDRESS, Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
 
 from .const import DOMAIN, PACKET_TYPE_TO_MODEL
@@ -20,6 +22,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: AtorchBleConfigEntry) ->
     # Establish hass.data[DOMAIN] slot before any downstream ticket writes to it.
     # Per implementer-locked "hass.data slot ownership" in PROJECT_CONTEXT.md.
     hass.data.setdefault(DOMAIN, {})
+
+    # test-before-setup: the integration actively opens GATT connections,
+    # so it must not set up entities for a meter that is not currently
+    # reachable. Resolve a connectable BLEDevice up front and raise
+    # ConfigEntryNotReady if none exists; HA then retries setup when the
+    # meter next advertises. The address MUST be uppercased — HA's
+    # bluetooth manager keys its device dictionaries by uppercase address
+    # and does a plain dict.get() (a lowercase address was a real
+    # production bug fixed in v0.1.5).
+    address: str = entry.data[CONF_ADDRESS]
+    if (
+        bluetooth.async_ble_device_from_address(
+            hass, address.upper(), connectable=True
+        )
+        is None
+    ):
+        raise ConfigEntryNotReady(
+            f"{address} is not currently reachable; will retry when it advertises"
+        )
 
     coordinator = AtorchBleCoordinator(hass, entry)
     await coordinator.async_start()

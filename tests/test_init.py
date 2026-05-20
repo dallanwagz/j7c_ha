@@ -8,8 +8,11 @@ state when a user deletes the integration.
 
 from __future__ import annotations
 
-from unittest.mock import patch
+import contextlib
+from unittest.mock import MagicMock, patch
 
+from bleak.backends.device import BLEDevice
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
@@ -22,6 +25,18 @@ from custom_components.atorch_ble.const import (
 )
 
 from .conftest import TEST_MAC_NORMALIZED, TEST_TITLE
+
+# Patch target for the test-before-setup reachability probe in
+# async_setup_entry. Returning a fake BLEDevice makes the meter look
+# reachable; returning None drives the ConfigEntryNotReady retry path.
+_BLE_LOOKUP = (
+    "custom_components.atorch_ble.bluetooth.async_ble_device_from_address"
+)
+
+
+def _reachable_device() -> patch:
+    """Patch the reachability probe so the meter appears reachable."""
+    return patch(_BLE_LOOKUP, return_value=MagicMock(spec=BLEDevice))
 
 
 def _make_entry(
@@ -42,10 +57,11 @@ async def test_setup_unload_resetup_cycle(hass: HomeAssistant) -> None:
     """Setup -> unload -> re-setup completes without leaking state."""
     entry = _make_entry(hass)
 
-    # Patch the runner so async_setup_entry doesn't actually fire BLE I/O.
+    # Patch the runner so async_setup_entry doesn't actually fire BLE I/O,
+    # and make the test-before-setup reachability probe see the meter.
     with patch(
         "custom_components.atorch_ble.coordinator.AtorchBleCoordinator._start_runner"
-    ):
+    ), _reachable_device():
         assert await hass.config_entries.async_setup(entry.entry_id) is True
         await hass.async_block_till_done()
 
@@ -72,7 +88,7 @@ async def test_device_registry_entry_created(hass: HomeAssistant) -> None:
 
     with patch(
         "custom_components.atorch_ble.coordinator.AtorchBleCoordinator._start_runner"
-    ):
+    ), _reachable_device():
         assert await hass.config_entries.async_setup(entry.entry_id) is True
         await hass.async_block_till_done()
 
@@ -93,7 +109,7 @@ async def test_entry_removal_cleans_up_registry(hass: HomeAssistant) -> None:
 
     with patch(
         "custom_components.atorch_ble.coordinator.AtorchBleCoordinator._start_runner"
-    ):
+    ), _reachable_device():
         assert await hass.config_entries.async_setup(entry.entry_id) is True
         await hass.async_block_till_done()
 
@@ -120,3 +136,27 @@ async def test_entry_removal_cleans_up_registry(hass: HomeAssistant) -> None:
     for entity_id in entity_ids:
         assert entity_reg.async_get(entity_id) is None
     assert not hass.config_entries.async_entries(DOMAIN)
+
+
+async def test_setup_retries_when_device_unreachable(
+    hass: HomeAssistant,
+) -> None:
+    """Setup raises ConfigEntryNotReady when the meter is not reachable.
+
+    The test-before-setup reachability probe returns ``None`` (no
+    connectable BLEDevice in HA's bluetooth registry), so async_setup_entry
+    must raise ConfigEntryNotReady and the entry must land in the
+    SETUP_RETRY state rather than setting up with unavailable entities.
+    """
+    entry = _make_entry(hass)
+
+    with patch(
+        "custom_components.atorch_ble.coordinator.AtorchBleCoordinator._start_runner"
+    ), patch(_BLE_LOOKUP, return_value=None):
+        with contextlib.suppress(Exception):
+            await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    # Entry is in the retry state; no coordinator was stashed.
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+    assert entry.entry_id not in hass.data.get(DOMAIN, {})

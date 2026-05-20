@@ -83,10 +83,6 @@ ADVERTISEMENT_WAIT_TIMEOUT_SECONDS = 900  # 15 minutes
 # interval elapses).
 POLLED_NOTIFICATION_TIMEOUT_SECONDS = 25.0
 
-# Interval for the data-rate INFO summary logged while a connection is
-# held (both persistent and polled modes).
-DATA_RATE_SUMMARY_INTERVAL_SECONDS = 30
-
 # Repair-issue thresholds.
 CONNECT_FAILURE_RAISE_THRESHOLD = 5
 CONNECT_FAILURE_RERAISE_INTERVAL = 50

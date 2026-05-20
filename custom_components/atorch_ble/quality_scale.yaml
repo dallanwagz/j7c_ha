@@ -34,7 +34,7 @@ rules:
   dependency-transparency:
     status: done
     comment: |
-      Pinned `atorch-ble==0.1.0` in manifest.json requirements; library
+      Pinned `atorch-ble==0.1.1` in manifest.json requirements; library
       published from a sibling repo with reproducible builds.
   docs-actions:
     status: exempt
@@ -71,11 +71,15 @@ rules:
       manifest. The confirm step has nothing further to test before commit;
       it presents the discovered device for user acknowledgement.
   test-before-setup:
-    status: exempt
+    status: done
     comment: |
-      Passive BLE: setup cannot synchronously contact the device. Connection
-      state and freshness are exposed via the connection_state diagnostic
-      sensor and a `cannot_connect_after_setup` repair issue (#21).
+      async_setup_entry probes device reachability before starting the
+      coordinator: it resolves a connectable BLEDevice via
+      bluetooth.async_ble_device_from_address (uppercased address) and
+      raises homeassistant.exceptions.ConfigEntryNotReady when no device
+      is currently advertising. HA then retries setup when the meter next
+      advertises, instead of setting up immediately with unavailable
+      entities.
   unique-config-entry:
     status: done
     comment: |
@@ -127,7 +131,7 @@ rules:
     status: done
     comment: |
       95% project coverage gate (pyproject.toml --cov-fail-under=95);
-      actual coverage 98.29% across 60 tests (#16, #20).
+      actual coverage 97.43% across 81 tests (#16, #20).
 
   # Gold
   devices:

@@ -9,8 +9,9 @@ absence of raw notification bytes in the payload, the hard-coded English
 from __future__ import annotations
 
 import json
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+from bleak.backends.device import BLEDevice
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -40,6 +41,9 @@ async def _setup_and_get_diagnostics(
     entry = _make_entry(hass)
     with patch(
         "custom_components.atorch_ble.coordinator.AtorchBleCoordinator._start_runner"
+    ), patch(
+        "custom_components.atorch_ble.bluetooth.async_ble_device_from_address",
+        return_value=MagicMock(spec=BLEDevice),
     ):
         assert await hass.config_entries.async_setup(entry.entry_id) is True
         await hass.async_block_till_done()

@@ -10,6 +10,14 @@ Releases are cut by pushing a `vMAJOR.MINOR.PATCH` tag; the
 `custom_components/atorch_ble/` into `atorch_ble.zip` and attaches it
 to the GitHub Release.
 
+## [0.2.0] - 2026-05-20
+
+### Changed
+- `async_setup_entry` now verifies the meter is reachable before completing setup (HA Core `test-before-setup` quality-scale rule). It resolves a connectable `BLEDevice` via `bluetooth.async_ble_device_from_address` (uppercased address) and raises `ConfigEntryNotReady` when the meter is not currently advertising. Home Assistant then retries setup automatically when the meter next advertises, instead of setting up immediately with unavailable entities. The `test-before-setup` rule in `quality_scale.yaml` moves from `exempt` to `done` — the previous "passive BLE" exemption rationale was inaccurate, since the integration actively opens GATT connections.
+
+### Removed
+- Data-rate instrumentation. The 30-second INFO heartbeat that logged raw-notification and decoded-frame counts while connected (added in v0.1.6 to diagnose the now-fixed v0.1.7 checksum bug) has been removed entirely, along with the `_raw_notification_count` / `_decoded_frame_count` counters and the `DATA_RATE_SUMMARY_INTERVAL_SECONDS` constant. A periodic INFO heartbeat is not acceptable for HA Core. Observability is unaffected: `last_seen`, `connection_state`, and the `parser_error_rate_5m` rolling-window metric remain in diagnostics.
+
 ## [0.1.9] - 2026-05-20
 
 ### Fixed

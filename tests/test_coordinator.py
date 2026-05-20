@@ -64,6 +64,9 @@ async def _setup(
     entry = _make_entry(hass, options=options, data=data)
     with patch(
         "custom_components.atorch_ble.coordinator.AtorchBleCoordinator._start_runner"
+    ), patch(
+        "custom_components.atorch_ble.bluetooth.async_ble_device_from_address",
+        return_value=MagicMock(spec=BLEDevice),
     ):
         assert await hass.config_entries.async_setup(entry.entry_id) is True
         await hass.async_block_till_done()
@@ -314,6 +317,9 @@ async def test_unsupported_acknowledgements_survive_restart(
     await hass.async_block_till_done()
     with patch(
         "custom_components.atorch_ble.coordinator.AtorchBleCoordinator._start_runner"
+    ), patch(
+        "custom_components.atorch_ble.bluetooth.async_ble_device_from_address",
+        return_value=MagicMock(spec=BLEDevice),
     ):
         assert await hass.config_entries.async_setup(entry.entry_id) is True
         await hass.async_block_till_done()
@@ -1364,126 +1370,3 @@ async def test_poll_method_yields_to_persistent_mode_switch(
     assert coordinator._client is persistent_client
     # ... and the poll did not stamp the polled-only resting state.
     assert coordinator._connection_state != "disconnected"
-
-
-# ---------------------------------------------------------------------------
-# v0.1.6 — data-rate instrumentation
-# ---------------------------------------------------------------------------
-
-
-async def test_data_rate_counters_increment(
-    hass: HomeAssistant, build_j7c_frame
-) -> None:
-    """Raw-notification and decoded-frame counters track parser activity."""
-    _, coordinator = await _setup(hass)
-    assert coordinator._raw_notification_count == 0
-    assert coordinator._decoded_frame_count == 0
-
-    frame = build_j7c_frame()
-    # Two raw fragments -> 2 raw notifications, 1 decoded frame.
-    coordinator._notification_callback(None, frame[:20])
-    coordinator._notification_callback(None, frame[20:])
-    await hass.async_block_till_done()
-    assert coordinator._raw_notification_count == 2
-    assert coordinator._decoded_frame_count == 1
-
-    # A second complete frame in one notification -> +1 raw, +1 decoded.
-    coordinator._notification_callback(None, build_j7c_frame())
-    await hass.async_block_till_done()
-    assert coordinator._raw_notification_count == 3
-    assert coordinator._decoded_frame_count == 2
-
-
-async def test_log_data_rate_summary_with_data(
-    hass: HomeAssistant, caplog: pytest.LogCaptureFixture, build_j7c_frame
-) -> None:
-    """The 30s summary logs counts and resets the per-window counters."""
-    _, coordinator = await _setup(hass)
-    coordinator._notification_callback(None, build_j7c_frame())
-    await hass.async_block_till_done()
-
-    logger_name = "custom_components.atorch_ble.coordinator"
-    with caplog.at_level(logging.INFO, logger=logger_name):
-        coordinator._log_data_rate_summary()
-
-    lines = [
-        r.getMessage() for r in caplog.records if "Data rate" in r.getMessage()
-    ]
-    assert len(lines) == 1
-    assert "1 raw notifications" in lines[0]
-    assert "1 decoded frames" in lines[0]
-    assert "in last 30s" in lines[0]
-    assert coordinator.mac_normalized in lines[0]
-    # Counters reset after the summary.
-    assert coordinator._raw_notification_count == 0
-    assert coordinator._decoded_frame_count == 0
-
-
-async def test_log_data_rate_summary_no_data(
-    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
-) -> None:
-    """A zero-data window logs the explicit 'NO data received' line."""
-    _, coordinator = await _setup(hass)
-    logger_name = "custom_components.atorch_ble.coordinator"
-    with caplog.at_level(logging.INFO, logger=logger_name):
-        coordinator._log_data_rate_summary()
-
-    lines = [
-        r.getMessage() for r in caplog.records if "Data rate" in r.getMessage()
-    ]
-    assert len(lines) == 1
-    assert "NO data received in last 30s while connected" in lines[0]
-    assert "meter may need a start command" in lines[0]
-
-
-async def test_data_rate_summary_loop_fires_periodically(
-    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
-) -> None:
-    """The summary task emits one INFO line per 30s interval while connected.
-
-    Patches the interval constant to a tiny value so the test exercises
-    the real ``async_track``-style loop without waiting 30 real seconds.
-    """
-    _, coordinator = await _setup(hass)
-    logger_name = "custom_components.atorch_ble.coordinator"
-
-    with patch(
-        "custom_components.atorch_ble.coordinator."
-        "DATA_RATE_SUMMARY_INTERVAL_SECONDS",
-        0.01,
-    ), caplog.at_level(logging.INFO, logger=logger_name):
-        task = coordinator._start_data_rate_summary()
-        # Counters reset on start.
-        assert coordinator._raw_notification_count == 0
-        assert coordinator._decoded_frame_count == 0
-        # Let several intervals elapse.
-        for _ in range(50):
-            await asyncio.sleep(0.01)
-            if (
-                sum("Data rate" in r.getMessage() for r in caplog.records)
-                >= 2
-            ):
-                break
-        await coordinator._cancel_data_rate_summary(task)
-
-    lines = [r for r in caplog.records if "Data rate" in r.getMessage()]
-    assert len(lines) >= 2
-    # Task is cleanly cancelled.
-    assert task.done()
-
-
-async def test_cancel_data_rate_summary_handles_none(
-    hass: HomeAssistant,
-) -> None:
-    """Cancelling a None / already-done summary task is a safe no-op."""
-    _, coordinator = await _setup(hass)
-    # None task -> no-op.
-    await coordinator._cancel_data_rate_summary(None)
-    # Already-done task -> no-op. The loop swallows CancelledError and
-    # returns cleanly, so awaiting it does not re-raise.
-    task = coordinator._start_data_rate_summary()
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
-    assert task.done()
-    await coordinator._cancel_data_rate_summary(task)
