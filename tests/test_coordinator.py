@@ -23,6 +23,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.atorch_ble.const import (
     ACK_UNSUPPORTED_KEY,
+    ATORCH_SERVICE_UUID,
     CONF_CONNECTION_MODE,
     CONF_POLL_INTERVAL_SECONDS,
     DOMAIN,
@@ -645,10 +646,13 @@ async def test_wait_for_fresh_advertisement_slow_path_arrival(
     fake_device = MagicMock(spec=BLEDevice)
     captured: dict[str, object] = {}
 
+    service_info = MagicMock()
+    service_info.address = TEST_MAC_NORMALIZED
+
     def _capture_register(_hass, cb, _matcher, _mode):
         captured["cb"] = cb
         # Fire the advertisement on the loop as soon as it spins.
-        hass.loop.call_soon(cb, MagicMock(), MagicMock())
+        hass.loop.call_soon(cb, service_info, MagicMock())
         return MagicMock()
 
     # First lookup (fast path) returns None; second (post-event) returns device.
@@ -663,6 +667,111 @@ async def test_wait_for_fresh_advertisement_slow_path_arrival(
 
     assert result is fake_device
     assert "cb" in captured
+
+
+async def test_wait_for_fresh_advertisement_registers_service_uuid_matcher(
+    hass: HomeAssistant,
+) -> None:
+    """The slow-path callback is registered with a service_uuid matcher.
+
+    Regression test for v0.1.4: the callback used to be registered with
+    ``BluetoothCallbackMatcher(address=...)`` keyed on a lowercase
+    address. HA represents advertisement addresses uppercase and the
+    matcher compares case-sensitively, so the callback never fired. The
+    fix matches on the Atorch service UUID instead.
+    """
+    _, coordinator = await _setup(hass)
+    fake_device = MagicMock(spec=BLEDevice)
+    captured: dict[str, object] = {}
+
+    service_info = MagicMock()
+    service_info.address = TEST_MAC_NORMALIZED
+
+    def _capture_register(_hass, cb, matcher, _mode):
+        captured["matcher"] = matcher
+        hass.loop.call_soon(cb, service_info, MagicMock())
+        return MagicMock()
+
+    with patch(
+        "custom_components.atorch_ble.coordinator.bluetooth.async_ble_device_from_address",
+        side_effect=[None, fake_device],
+    ), patch(
+        "custom_components.atorch_ble.coordinator.bluetooth.async_register_callback",
+        side_effect=_capture_register,
+    ):
+        await coordinator._wait_for_fresh_advertisement()
+
+    matcher = captured["matcher"]
+    assert matcher.get("service_uuid") == ATORCH_SERVICE_UUID
+    # The matcher must NOT be keyed on address (the v0.1.3-and-earlier bug).
+    assert "address" not in matcher
+
+
+async def test_wait_for_fresh_advertisement_address_case_mismatch_resolves(
+    hass: HomeAssistant,
+) -> None:
+    """An advertisement whose address differs only in CASE still resolves.
+
+    Regression test for the exact v0.1.4 bug: HA delivers advertisement
+    addresses in UPPERCASE while the coordinator's stored address is
+    lowercase. The in-callback filter must compare case-insensitively,
+    so an UPPERCASE ``service_info.address`` resolves the wait.
+    """
+    _, coordinator = await _setup(hass)
+    assert coordinator.entry.data[CONF_ADDRESS] == TEST_MAC_NORMALIZED
+    fake_device = MagicMock(spec=BLEDevice)
+
+    service_info = MagicMock()
+    # HA delivers the address uppercase; stored address is lowercase.
+    service_info.address = TEST_MAC_NORMALIZED.upper()
+
+    def _capture_register(_hass, cb, _matcher, _mode):
+        hass.loop.call_soon(cb, service_info, MagicMock())
+        return MagicMock()
+
+    with patch(
+        "custom_components.atorch_ble.coordinator.bluetooth.async_ble_device_from_address",
+        side_effect=[None, fake_device],
+    ), patch(
+        "custom_components.atorch_ble.coordinator.bluetooth.async_register_callback",
+        side_effect=_capture_register,
+    ):
+        result = await coordinator._wait_for_fresh_advertisement()
+
+    assert result is fake_device
+
+
+async def test_wait_for_fresh_advertisement_ignores_other_address(
+    hass: HomeAssistant,
+) -> None:
+    """An advertisement from a DIFFERENT address does NOT resolve the wait.
+
+    The callback fires for any Atorch meter in range (it is registered
+    on the shared service UUID); the in-callback address filter must
+    drop advertisements that are not from our meter, so the wait times
+    out rather than connecting to the wrong device.
+    """
+    _, coordinator = await _setup(hass)
+
+    other_info = MagicMock()
+    other_info.address = "11:22:33:44:55:66"  # a different Atorch meter
+
+    def _capture_register(_hass, cb, _matcher, _mode):
+        hass.loop.call_soon(cb, other_info, MagicMock())
+        return MagicMock()
+
+    with patch(
+        "custom_components.atorch_ble.coordinator.bluetooth.async_ble_device_from_address",
+        return_value=None,
+    ), patch(
+        "custom_components.atorch_ble.coordinator.bluetooth.async_register_callback",
+        side_effect=_capture_register,
+    ), patch(
+        "custom_components.atorch_ble.coordinator.ADVERTISEMENT_WAIT_TIMEOUT_SECONDS",
+        0.05,
+    ):
+        with pytest.raises(BleakError, match="No advertisement"):
+            await coordinator._wait_for_fresh_advertisement()
 
 
 async def test_wait_for_fresh_advertisement_timeout_raises(
@@ -705,6 +814,9 @@ async def test_wait_for_fresh_advertisement_log_includes_scanner_details(
     fake_device = MagicMock(spec=BLEDevice)
 
     service_info = MagicMock()
+    # HA delivers the address uppercase; the in-callback filter compares
+    # case-insensitively against the lowercase stored address.
+    service_info.address = TEST_MAC_NORMALIZED.upper()
     service_info.source = "AA:BB:CC:DD:EE:FF"
     service_info.rssi = -72
     service_info.connectable = False  # advert came in via passive-only scanner

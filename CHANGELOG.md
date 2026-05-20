@@ -10,6 +10,14 @@ Releases are cut by pushing a `vMAJOR.MINOR.PATCH` tag; the
 `custom_components/atorch_ble/` into `atorch_ble.zip` and attaches it
 to the GitHub Release.
 
+## [0.1.4] - 2026-05-19
+
+### Fixed
+- Advertisement-wait callback now actually fires. The coordinator registered its slow-path advertisement callback with `BluetoothCallbackMatcher(address=...)` using a lowercase address (from `format_mac`). HA's bluetooth subsystem represents advertisement addresses in UPPERCASE and `BluetoothCallbackMatcher` compares them case-sensitively, so the callback never fired — confirmed in production where a 900 s advertisement wait timed out while the meter was visibly present in HA's Advertisements panel with a strong signal. The callback is now registered against the Atorch service UUID (the same field the manifest's discovery matcher uses successfully) and filters to the target meter with a case-insensitive address comparison inside the callback, sidestepping address-case fragility entirely. This was the root cause behind every "No advertisement within Ns; meter unreachable" timeout since v0.1.1 — the advertisement-driven coordinator could never actually hear an advertisement.
+
+### Added
+- `ATORCH_SERVICE_UUID` constant in `const.py` (`0000ffe0-0000-1000-8000-00805f9b34fb`, lowercase to match HA's internal UUID representation).
+
 ## [0.1.3] - 2026-05-19
 
 ### Fixed

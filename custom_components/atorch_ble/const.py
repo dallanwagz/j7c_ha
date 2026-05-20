@@ -45,6 +45,10 @@ MAX_POLL_INTERVAL_SECONDS = 3600
 # a real capture (see batch-1/02 notes).
 CHARACTERISTIC_UUID = "0000FFE1-0000-1000-8000-00805F9B34FB"
 
+# Atorch BLE service UUID (advertised by all Atorch meters). Lowercase to
+# match HA's internal UUID representation.
+ATORCH_SERVICE_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb"
+
 # Connection backoff parameters (persistent and polled both share these).
 # Cap shortened from 60 s in v0.1.1: advertisement-wait now handles the
 # "device unreachable" case implicitly, so the outer backoff only needs

@@ -107,6 +107,7 @@ from homeassistant.loader import async_get_integration
 from .const import (
     ACK_UNSUPPORTED_KEY,
     ADVERTISEMENT_WAIT_TIMEOUT_SECONDS,
+    ATORCH_SERVICE_UUID,
     CHARACTERISTIC_UUID,
     CONF_CONNECTION_MODE,
     CONF_POLL_INTERVAL_SECONDS,
@@ -752,9 +753,11 @@ class AtorchBleCoordinator(
            production (meter advertising continuously) and in tests
            (registry pre-populated with a fake BLEDevice).
         2. **Slow path** — register a bluetooth callback scoped to the
-           meter's address (any scanner, passive-mode hint) and
+           Atorch service UUID (any scanner, passive-mode hint),
+           filter delivered advertisements to this meter by a
+           case-insensitive address compare inside the callback, and
            ``await`` an :class:`asyncio.Event` that the callback sets
-           when an advertisement arrives. After the event fires,
+           when a matching advertisement arrives. After the event fires,
            re-resolve via the direct (``connectable=True``) lookup —
            if the advert came in via a passive-only scanner the
            lookup returns ``None`` and the caller treats this as a
@@ -774,7 +777,14 @@ class AtorchBleCoordinator(
         """
         address = self.entry.data[CONF_ADDRESS]
 
-        # Fast path.
+        # Fast path. ``async_ble_device_from_address`` is case-insensitive
+        # internally in HA Core, so passing the lowercase ``address`` here
+        # is fine. Note the asymmetry with the slow-path callback below:
+        # the callback matcher CANNOT be keyed on ``address`` because
+        # ``BluetoothCallbackMatcher`` compares addresses case-sensitively
+        # and HA represents advertisement addresses uppercase — hence the
+        # service-uuid matcher + in-callback case-insensitive address
+        # filter approach.
         ble_device = bluetooth.async_ble_device_from_address(
             self.hass, address, connectable=True
         )
@@ -792,6 +802,13 @@ class AtorchBleCoordinator(
             service_info: BluetoothServiceInfoBleak,
             _change: BluetoothChange,
         ) -> None:
+            # The callback is registered against the Atorch service UUID,
+            # so it fires for ANY Atorch meter in range. Filter to OUR
+            # meter by a case-insensitive address compare — HA represents
+            # advertisement addresses uppercase, our stored address is
+            # lowercase.
+            if service_info.address.lower() != address.lower():
+                return
             # Log at INFO so the user can see we received an advert and
             # which scanner caught it. ``connectable`` here reflects the
             # scanner that delivered THIS advertisement; the
@@ -806,28 +823,23 @@ class AtorchBleCoordinator(
             )
             arrived.set()
 
-        # Register a broader callback — any advertisement from this
-        # address, including those from passive-only scanners. We
-        # filter for connectable-eligibility AFTER the wait via
-        # ``async_ble_device_from_address`` (the same check the
-        # consumer would do anyway).
-        #
-        # Empirically, the stricter matcher
-        # (``connectable=True`` + ``BluetoothScanningMode.ACTIVE``)
-        # silently fails to fire for advertisements that HA's
-        # bluetooth subsystem clearly receives via the same matchers
-        # used by the config_flow's discovery callback. Confirmed in
-        # production: 600 s waits timed out while multiple
-        # advertisements arrived in-window from a mix of passive-only
-        # and active ESPHome BT proxies. ``ScanningMode.PASSIVE`` here
-        # is a hint to HA about scanner-mode preference for THIS
-        # callback registration — it does not restrict the callback
-        # to passive scanners only; advertisements from active
-        # scanners are still delivered.
+        # Register the callback against the Atorch service UUID — the
+        # same field the manifest's discovery matcher uses successfully —
+        # rather than by address. ``BluetoothCallbackMatcher`` compares
+        # addresses case-sensitively, and HA's bluetooth subsystem
+        # represents advertisement addresses in UPPERCASE while our
+        # stored address (from ``format_mac``) is lowercase, so an
+        # address-keyed matcher NEVER fires. Confirmed in production: a
+        # 900 s wait timed out while the meter was visibly present in
+        # HA's Advertisements panel with a strong signal. We deliberately
+        # do NOT constrain the matcher with ``connectable`` — we've been
+        # burned by over-constraining the matcher before; the in-callback
+        # address filter plus the post-wait connectable lookup are
+        # sufficient.
         cancel = bluetooth.async_register_callback(
             self.hass,
             _on_advertisement,
-            BluetoothCallbackMatcher(address=address),
+            BluetoothCallbackMatcher(service_uuid=ATORCH_SERVICE_UUID),
             BluetoothScanningMode.PASSIVE,
         )
         try:
