@@ -1280,6 +1280,93 @@ async def test_poll_method_raises_bleak_error_on_decode_timeout(
 
 
 # ---------------------------------------------------------------------------
+# v0.1.9 — mode-switch connection-handle race
+# ---------------------------------------------------------------------------
+
+
+async def test_release_client_only_clears_own_handle(
+    hass: HomeAssistant,
+) -> None:
+    """_release_client clears the shared handle only if it still owns it.
+
+    Regression coverage for the v0.1.9 mode-switch race: a finishing
+    poll must not null out a connection handle the persistent runner
+    has since installed.
+    """
+    _, coordinator = await _setup(hass)
+
+    own_client = MagicMock()
+    foreign_client = MagicMock()
+
+    # Releasing some other client leaves an installed foreign handle intact.
+    coordinator._client = foreign_client
+    coordinator._release_client(own_client)
+    assert coordinator._client is foreign_client
+
+    # Releasing the actually-installed handle clears it.
+    coordinator._client = own_client
+    coordinator._release_client(own_client)
+    assert coordinator._client is None
+
+
+async def test_poll_method_yields_to_persistent_mode_switch(
+    hass: HomeAssistant, build_j7c_frame
+) -> None:
+    """A poll superseded by a switch to persistent mode yields cleanly.
+
+    Regression coverage for the v0.1.9 wedge: when a polled->persistent
+    switch starts the persistent runner while a poll is still finishing,
+    the finishing poll must NOT (a) null out the persistent runner's
+    connection handle or (b) stamp the polled-only "disconnected" state
+    over the persistent runner's state machine.
+    """
+    _, coordinator = await _setup(
+        hass, options={CONF_CONNECTION_MODE: MODE_POLLED}
+    )
+
+    fake_device = MagicMock(spec=BLEDevice)
+    poll_client = MagicMock()
+    poll_client.is_connected = False
+    persistent_client = MagicMock()
+
+    async def _fake_disconnect() -> None:
+        return None
+
+    poll_client.disconnect = _fake_disconnect
+
+    frame = build_j7c_frame(voltage_v=5.0, current_a=1.0)
+
+    async def _fake_start_notify(_uuid, callback) -> None:
+        # Simulate a polled->persistent switch landing mid-poll: the
+        # persistent runner takes over the shared handle and the mode.
+        coordinator._connection_mode = MODE_PERSISTENT
+        coordinator._client = persistent_client
+        # Deliver a full frame so the poll's decoded-reading wait returns.
+        callback(None, frame)
+
+    poll_client.start_notify = _fake_start_notify
+
+    async def _fake_establish(*_args, **_kwargs):
+        return poll_client
+
+    async def _fake_wait_for_adv():
+        return fake_device
+
+    with patch.object(
+        coordinator, "_wait_for_fresh_advertisement", _fake_wait_for_adv
+    ), patch(
+        "custom_components.atorch_ble.coordinator.establish_connection",
+        _fake_establish,
+    ):
+        await coordinator._poll_method(_poll_service_info())
+
+    # The persistent runner's handle survived the finishing poll ...
+    assert coordinator._client is persistent_client
+    # ... and the poll did not stamp the polled-only resting state.
+    assert coordinator._connection_state != "disconnected"
+
+
+# ---------------------------------------------------------------------------
 # v0.1.6 — data-rate instrumentation
 # ---------------------------------------------------------------------------
 

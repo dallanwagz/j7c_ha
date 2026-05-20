@@ -231,6 +231,10 @@ class AtorchBleCoordinator(
         self._runner_task: asyncio.Task[None] | None = None
         self._client: BleakClient | None = None
 
+        # Serializes _async_options_updated so two rapid mode switches
+        # cannot interleave their stop-runner / start-runner sequences.
+        self._options_lock = asyncio.Lock()
+
         # First-notification-per-session log gate. Reset at the start of
         # each connection in both persistent and polled mode so the
         # "data flowing" INFO line emits exactly once per connection
@@ -488,14 +492,21 @@ class AtorchBleCoordinator(
             self._on_connect_failure(exc)
             raise
         finally:
-            self._decoded_reading_event = None
+            if self._decoded_reading_event is decoded_event:
+                self._decoded_reading_event = None
             await self._cancel_data_rate_summary(summary_task)
             if client is not None:
                 with contextlib.suppress(Exception):
                     await client.disconnect()
                 _LOGGER.info("Disconnected from %s", self.mac_normalized)
-            self._client = None
-            if self._connection_state != "failed_after_setup":
+                self._release_client(client)
+            # Only stamp the polled-only "disconnected" resting state if
+            # this poll is still the active connection path. A switch to
+            # persistent mode hands the state machine to _run_persistent.
+            if (
+                self._connection_mode != MODE_PERSISTENT
+                and self._connection_state != "failed_after_setup"
+            ):
                 self._set_connection_state("disconnected")
 
     def _snapshot(self) -> AtorchBleData | None:
@@ -519,40 +530,48 @@ class AtorchBleCoordinator(
         change while still polled → update in-place (no restart needed);
         the running cycle finishes at the old interval and the next
         cycle observes the new one.
+
+        The whole body runs under :attr:`_options_lock` so two rapid
+        successive option updates cannot interleave their
+        stop-runner / start-runner sequences and leave a runner alive in
+        the wrong mode.
         """
-        new_mode = entry.options.get(CONF_CONNECTION_MODE, DEFAULT_CONNECTION_MODE)
-        new_interval = int(
-            entry.options.get(
-                CONF_POLL_INTERVAL_SECONDS, DEFAULT_POLL_INTERVAL_SECONDS
+        async with self._options_lock:
+            new_mode = entry.options.get(
+                CONF_CONNECTION_MODE, DEFAULT_CONNECTION_MODE
             )
-        )
+            new_interval = int(
+                entry.options.get(
+                    CONF_POLL_INTERVAL_SECONDS, DEFAULT_POLL_INTERVAL_SECONDS
+                )
+            )
 
-        mode_changed = new_mode != self._connection_mode
-        interval_changed = new_interval != self._poll_interval_seconds
+            mode_changed = new_mode != self._connection_mode
+            interval_changed = new_interval != self._poll_interval_seconds
 
-        self._poll_interval_seconds = new_interval
+            self._poll_interval_seconds = new_interval
 
-        if mode_changed:
-            _LOGGER.info(
-                "Connection mode change applied: %s -> %s (mac=%s)",
-                self._connection_mode,
-                new_mode,
-                self.mac_normalized,
-            )
-            self._connection_mode = new_mode
-            # Drain old runner before starting new one — never two alive.
-            await self._stop_runner()
-            self._set_connection_state(
-                "reconnecting" if new_mode == MODE_PERSISTENT else "disconnected"
-            )
-            if self._started:
-                self._start_runner()
-        elif interval_changed:
-            _LOGGER.info(
-                "Poll interval updated in-place: %ds (mac=%s)",
-                new_interval,
-                self.mac_normalized,
-            )
+            if mode_changed:
+                _LOGGER.info(
+                    "Connection mode change applied: %s -> %s (mac=%s)",
+                    self._connection_mode,
+                    new_mode,
+                    self.mac_normalized,
+                )
+                self._connection_mode = new_mode
+                # Drain old runner before starting new one — never two alive.
+                await self._stop_runner()
+                self._set_connection_state(
+                    "reconnecting" if new_mode == MODE_PERSISTENT else "disconnected"
+                )
+                if self._started:
+                    self._start_runner()
+            elif interval_changed:
+                _LOGGER.info(
+                    "Poll interval updated in-place: %ds (mac=%s)",
+                    new_interval,
+                    self.mac_normalized,
+                )
 
     # ------------------------------------------------------------------
     # Runner task management
@@ -589,6 +608,21 @@ class AtorchBleCoordinator(
             with contextlib.suppress(Exception):
                 await client.disconnect()
 
+    @callback
+    def _release_client(self, client: BleakClient) -> None:
+        """Clear the shared client handle, but only if it is still ``client``.
+
+        ``self._client`` is shared between the persistent runner and
+        :meth:`_poll_method`. During a mode switch the two paths can
+        briefly overlap; without this identity check a finishing
+        ``_poll_method`` could null out a live connection handle that the
+        persistent runner has since installed, orphaning a real GATT
+        connection that holds the meter's single connection slot — every
+        subsequent reconnect would then fail.
+        """
+        if self._client is client:
+            self._client = None
+
     # ------------------------------------------------------------------
     # Persistent-mode runner
     # ------------------------------------------------------------------
@@ -600,7 +634,7 @@ class AtorchBleCoordinator(
             while True:
                 self._set_connection_state("reconnecting")
                 try:
-                    await self._connect_and_subscribe_persistent()
+                    client = await self._connect_and_subscribe_persistent()
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # noqa: BLE001 — broad on purpose
@@ -617,28 +651,29 @@ class AtorchBleCoordinator(
                 # rather than wiring a disconnect event because bleak's
                 # disconnect-callback semantics differ across backends;
                 # a 1s heartbeat is plenty responsive for a meter that
-                # ticks at ~1Hz.
-                client = self._client
+                # ticks at ~1Hz. The heartbeat uses the client returned by
+                # the connect helper, not a re-read of self._client, so an
+                # overlapping poll cannot swap the handle mid-loop.
                 summary_task = self._start_data_rate_summary()
                 try:
-                    while client is not None and client.is_connected:
+                    while client.is_connected:
                         await asyncio.sleep(1.0)
                 finally:
                     await self._cancel_data_rate_summary(summary_task)
                     with contextlib.suppress(Exception):
-                        if client is not None:
-                            await client.disconnect()
-                    self._client = None
+                        await client.disconnect()
+                    self._release_client(client)
 
-                if self._connection_state != "failed_after_setup":
-                    self._set_connection_state("disconnected")
+                # A persistent-mode drop goes straight back to
+                # "reconnecting" at the top of the loop — the "disconnected"
+                # state is polled-mode-only.
                 _LOGGER.info(
                     "Disconnected from %s; will reconnect", self.mac_normalized
                 )
         except asyncio.CancelledError:
             return
 
-    async def _connect_and_subscribe_persistent(self) -> None:  # pragma: no cover - requires real bleak loop; covered by smoke test
+    async def _connect_and_subscribe_persistent(self) -> BleakClient:  # pragma: no cover - requires real bleak loop; covered by smoke test
         ble_device = await self._wait_for_fresh_advertisement()
         _LOGGER.info("Attempting GATT connection to %s", self.mac_normalized)
         client = await establish_connection(
@@ -664,6 +699,7 @@ class AtorchBleCoordinator(
         # storm of the state change still logs the first-frame line.
         self._first_notification_logged = False
         self._set_connection_state("connected")
+        return client
 
     @callback
     def _on_disconnected_callback(self, _client: BleakClient) -> None:

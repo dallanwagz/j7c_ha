@@ -10,6 +10,12 @@ Releases are cut by pushing a `vMAJOR.MINOR.PATCH` tag; the
 `custom_components/atorch_ble/` into `atorch_ble.zip` and attaches it
 to the GitHub Release.
 
+## [0.1.9] - 2026-05-20
+
+### Fixed
+- Connection-handle race during connection-mode switches. The shared `self._client` handle is used by both the persistent runner and the polled `poll_method`, and `poll_method`'s cleanup cleared it unconditionally. When a polled→persistent mode switch started the persistent runner while a poll was still finishing, the finishing poll could null out the persistent runner's live connection handle — orphaning a real GATT connection that holds the meter's single connection slot, after which every reconnect failed and the integration wedged in "reconnecting" with no data. Client-handle cleanup is now identity-guarded (a path releases the handle only if it still owns it), the persistent runner holds its connection in a local rather than re-reading the shared handle, and `_async_options_updated` is serialized with a lock so rapid successive mode switches cannot interleave their stop/start sequences.
+- Persistent mode no longer briefly reports the polled-only `disconnected` connection state on a connection drop. `_run_persistent` set `disconnected` — whose display text reads "polled mode — between polls" — for an instant before transitioning to `reconnecting`, which was misleading in the activity log. A persistent-mode drop now goes straight to `reconnecting`; `disconnected` is now a polled-mode-only state.
+
 ## [0.1.8] - 2026-05-19
 
 ### Changed
