@@ -8,6 +8,8 @@ title/model rewriting, and the cannot_connect_after_setup
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 from unittest.mock import MagicMock, patch
 
@@ -960,3 +962,245 @@ async def test_logging_once_discipline(
             _drive_failure(coordinator)
         await hass.async_block_till_done()
         assert _streak_warnings() == 1
+
+
+# ---------------------------------------------------------------------------
+# v0.1.6 — polled mode waits for a DECODED frame (not a raw fragment)
+# ---------------------------------------------------------------------------
+
+
+async def test_decoded_reading_event_set_only_after_full_frame(
+    hass: HomeAssistant, build_j7c_frame
+) -> None:
+    """A raw fragment does NOT set the decoded-reading event; a full frame does.
+
+    The polled runner waits on ``_decoded_reading_event`` so it does not
+    disconnect mid-frame. The event must stay unset while only partial
+    notifications have arrived and only fire once the parser yields a
+    complete ``UsbMeterReading``.
+    """
+    _, coordinator = await _setup(
+        hass, options={CONF_CONNECTION_MODE: MODE_POLLED}
+    )
+    event = asyncio.Event()
+    coordinator._decoded_reading_event = event
+
+    frame = build_j7c_frame(voltage_v=5.0, current_a=1.5)
+
+    # Feed only the first half of the frame — a raw fragment. The parser
+    # yields nothing, so the event must remain unset.
+    coordinator._notification_callback(None, frame[:20])
+    await hass.async_block_till_done()
+    assert not event.is_set()
+    assert coordinator.last_reading is None
+
+    # Feed the remaining bytes — the parser now assembles a full frame.
+    coordinator._notification_callback(None, frame[20:])
+    await hass.async_block_till_done()
+    assert event.is_set()
+    assert coordinator.last_reading is not None
+
+
+async def test_decoded_reading_event_none_is_noop(
+    hass: HomeAssistant, build_j7c_frame
+) -> None:
+    """With no event armed (persistent mode), decoding a frame is a no-op.
+
+    ``_decoded_reading_event`` is left ``None`` outside a polled cycle;
+    the notification callback must not raise when a frame decodes.
+    """
+    _, coordinator = await _setup(
+        hass, options={CONF_CONNECTION_MODE: MODE_PERSISTENT}
+    )
+    assert coordinator._decoded_reading_event is None
+    coordinator._notification_callback(None, build_j7c_frame())
+    await hass.async_block_till_done()
+    assert coordinator.last_reading is not None
+
+
+async def test_run_polled_does_not_disconnect_until_decoded_reading(
+    hass: HomeAssistant, build_j7c_frame
+) -> None:
+    """The polled runner holds the connection until a frame fully decodes.
+
+    Regression test for the v0.1.6 production bug: the runner used to
+    call ``got_reading.set()`` on the first raw notification, which is
+    typically just a fragment, and disconnected before the parser could
+    reassemble a complete 36-byte frame. The runner must now keep the
+    connection open across fragmented notifications and disconnect only
+    after a decoded ``UsbMeterReading`` is published.
+    """
+    _, coordinator = await _setup(
+        hass, options={CONF_CONNECTION_MODE: MODE_POLLED}
+    )
+
+    fake_device = MagicMock(spec=BLEDevice)
+    fake_client = MagicMock()
+    disconnect_calls: list[None] = []
+
+    async def _fake_disconnect() -> None:
+        disconnect_calls.append(None)
+
+    fake_client.disconnect = _fake_disconnect
+
+    frame = build_j7c_frame(voltage_v=12.0, current_a=2.0)
+
+    async def _fake_start_notify(_uuid, callback) -> None:
+        # Deliver a raw fragment first — this must NOT cause a disconnect.
+        callback(None, frame[:20])
+        assert not disconnect_calls, "disconnected on a raw fragment"
+        # Then deliver the rest so the parser assembles a complete frame.
+        callback(None, frame[20:])
+
+    fake_client.start_notify = _fake_start_notify
+
+    async def _fake_establish(*_args, **_kwargs):
+        return fake_client
+
+    async def _fake_wait_for_adv():
+        return fake_device
+
+    with patch.object(
+        coordinator, "_wait_for_fresh_advertisement", _fake_wait_for_adv
+    ), patch(
+        "custom_components.atorch_ble.coordinator.establish_connection",
+        _fake_establish,
+    ):
+        task = hass.async_create_task(coordinator._run_polled())
+        # Let the first cycle run to completion (it sleeps before cycle 2).
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if coordinator.last_reading is not None and disconnect_calls:
+                break
+        # The runner swallows CancelledError and returns cleanly.
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    # A complete reading was decoded ...
+    assert coordinator.last_reading is not None
+    # ... and the disconnect happened only after that.
+    assert len(disconnect_calls) >= 1
+
+
+# ---------------------------------------------------------------------------
+# v0.1.6 — data-rate instrumentation
+# ---------------------------------------------------------------------------
+
+
+async def test_data_rate_counters_increment(
+    hass: HomeAssistant, build_j7c_frame
+) -> None:
+    """Raw-notification and decoded-frame counters track parser activity."""
+    _, coordinator = await _setup(hass)
+    assert coordinator._raw_notification_count == 0
+    assert coordinator._decoded_frame_count == 0
+
+    frame = build_j7c_frame()
+    # Two raw fragments -> 2 raw notifications, 1 decoded frame.
+    coordinator._notification_callback(None, frame[:20])
+    coordinator._notification_callback(None, frame[20:])
+    await hass.async_block_till_done()
+    assert coordinator._raw_notification_count == 2
+    assert coordinator._decoded_frame_count == 1
+
+    # A second complete frame in one notification -> +1 raw, +1 decoded.
+    coordinator._notification_callback(None, build_j7c_frame())
+    await hass.async_block_till_done()
+    assert coordinator._raw_notification_count == 3
+    assert coordinator._decoded_frame_count == 2
+
+
+async def test_log_data_rate_summary_with_data(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture, build_j7c_frame
+) -> None:
+    """The 30s summary logs counts and resets the per-window counters."""
+    _, coordinator = await _setup(hass)
+    coordinator._notification_callback(None, build_j7c_frame())
+    await hass.async_block_till_done()
+
+    logger_name = "custom_components.atorch_ble.coordinator"
+    with caplog.at_level(logging.INFO, logger=logger_name):
+        coordinator._log_data_rate_summary()
+
+    lines = [
+        r.getMessage() for r in caplog.records if "Data rate" in r.getMessage()
+    ]
+    assert len(lines) == 1
+    assert "1 raw notifications" in lines[0]
+    assert "1 decoded frames" in lines[0]
+    assert "in last 30s" in lines[0]
+    assert coordinator.mac_normalized in lines[0]
+    # Counters reset after the summary.
+    assert coordinator._raw_notification_count == 0
+    assert coordinator._decoded_frame_count == 0
+
+
+async def test_log_data_rate_summary_no_data(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A zero-data window logs the explicit 'NO data received' line."""
+    _, coordinator = await _setup(hass)
+    logger_name = "custom_components.atorch_ble.coordinator"
+    with caplog.at_level(logging.INFO, logger=logger_name):
+        coordinator._log_data_rate_summary()
+
+    lines = [
+        r.getMessage() for r in caplog.records if "Data rate" in r.getMessage()
+    ]
+    assert len(lines) == 1
+    assert "NO data received in last 30s while connected" in lines[0]
+    assert "meter may need a start command" in lines[0]
+
+
+async def test_data_rate_summary_loop_fires_periodically(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The summary task emits one INFO line per 30s interval while connected.
+
+    Patches the interval constant to a tiny value so the test exercises
+    the real ``async_track``-style loop without waiting 30 real seconds.
+    """
+    _, coordinator = await _setup(hass)
+    logger_name = "custom_components.atorch_ble.coordinator"
+
+    with patch(
+        "custom_components.atorch_ble.coordinator."
+        "DATA_RATE_SUMMARY_INTERVAL_SECONDS",
+        0.01,
+    ), caplog.at_level(logging.INFO, logger=logger_name):
+        task = coordinator._start_data_rate_summary()
+        # Counters reset on start.
+        assert coordinator._raw_notification_count == 0
+        assert coordinator._decoded_frame_count == 0
+        # Let several intervals elapse.
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            if (
+                sum("Data rate" in r.getMessage() for r in caplog.records)
+                >= 2
+            ):
+                break
+        await coordinator._cancel_data_rate_summary(task)
+
+    lines = [r for r in caplog.records if "Data rate" in r.getMessage()]
+    assert len(lines) >= 2
+    # Task is cleanly cancelled.
+    assert task.done()
+
+
+async def test_cancel_data_rate_summary_handles_none(
+    hass: HomeAssistant,
+) -> None:
+    """Cancelling a None / already-done summary task is a safe no-op."""
+    _, coordinator = await _setup(hass)
+    # None task -> no-op.
+    await coordinator._cancel_data_rate_summary(None)
+    # Already-done task -> no-op. The loop swallows CancelledError and
+    # returns cleanly, so awaiting it does not re-raise.
+    task = coordinator._start_data_rate_summary()
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    assert task.done()
+    await coordinator._cancel_data_rate_summary(task)

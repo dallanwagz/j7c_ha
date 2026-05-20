@@ -65,8 +65,19 @@ RECONNECT_MAX_BACKOFF_SECONDS = 30.0
 # advertisement cycle on slow-advertising firmware variants.
 ADVERTISEMENT_WAIT_TIMEOUT_SECONDS = 900  # 15 minutes
 
-# One-shot polled-cycle notification wait timeout.
-POLLED_NOTIFICATION_TIMEOUT_SECONDS = 5.0
+# Polled-cycle wait timeout for a fully DECODED reading. A raw BLE
+# notification is often just a fragment of the 36-byte Atorch frame;
+# the parser reassembles a complete frame from several notifications.
+# Production logs show a complete frame can take 15+ seconds to
+# assemble on this hardware, so the polled runner must wait that long
+# for an actual decoded UsbMeterReading before giving up — waiting on
+# the first raw notification (the v0.1.5 behaviour) disconnected the
+# meter mid-frame and decoded zero readings.
+POLLED_NOTIFICATION_TIMEOUT_SECONDS = 25.0
+
+# Interval for the data-rate INFO summary logged while a connection is
+# held (both persistent and polled modes).
+DATA_RATE_SUMMARY_INTERVAL_SECONDS = 30
 
 # Repair-issue thresholds.
 CONNECT_FAILURE_RAISE_THRESHOLD = 5

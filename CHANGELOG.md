@@ -10,6 +10,18 @@ Releases are cut by pushing a `vMAJOR.MINOR.PATCH` tag; the
 `custom_components/atorch_ble/` into `atorch_ble.zip` and attaches it
 to the GitHub Release.
 
+## [0.1.6] - 2026-05-19
+
+### Fixed
+- Polled mode now waits for an actual decoded reading before disconnecting. The polled runner previously called `got_reading.set()` on the **first raw BLE notification**, but a raw notification is typically just a fragment of the 36-byte Atorch frame — the parser reassembles a complete frame from several notifications. The runner connected for only a few seconds, grabbed one fragment, and disconnected before the parser could yield a `UsbMeterReading`, so polled mode decoded zero readings in production. The runner now subscribes via `_notification_callback` and waits on a `_decoded_reading_event` that is set only after a complete frame is decoded and published.
+
+### Changed
+- `POLLED_NOTIFICATION_TIMEOUT_SECONDS` raised from 5 s to 25 s. Production logs show a complete frame can take 15+ seconds to assemble on this hardware, so the polled runner must wait that long for a real decoded reading. A timeout with no decoded reading is still treated as a failure for backoff/repair tracking.
+
+### Added
+- Data-rate instrumentation. The coordinator now counts raw BLE notifications (`_raw_notification_count`) and decoded frames (`_decoded_frame_count`) and logs a 30-second INFO summary while a connection is held in either mode: `Data rate (mac=...): N raw notifications, M decoded frames in last 30s`. If a full window passes with no data while connected, the line says so explicitly (`NO data received in last 30s while connected — meter may need a start command`). This will reveal whether the meter streams continuously or sends only a token frame after subscription — the open question behind sporadic sensor updates.
+- `DATA_RATE_SUMMARY_INTERVAL_SECONDS` constant in `const.py`.
+
 ## [0.1.5] - 2026-05-19
 
 ### Fixed

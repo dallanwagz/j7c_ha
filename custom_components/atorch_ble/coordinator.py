@@ -113,6 +113,7 @@ from .const import (
     CONF_POLL_INTERVAL_SECONDS,
     CONNECT_FAILURE_RAISE_THRESHOLD,
     CONNECT_FAILURE_RERAISE_INTERVAL,
+    DATA_RATE_SUMMARY_INTERVAL_SECONDS,
     DEFAULT_CONNECTION_MODE,
     DEFAULT_POLL_INTERVAL_SECONDS,
     DOMAIN,
@@ -232,6 +233,20 @@ class AtorchBleCoordinator(
         # "data flowing" INFO line emits exactly once per connection
         # attempt that successfully receives a frame.
         self._first_notification_logged: bool = False
+
+        # Data-rate instrumentation. ``_raw_notification_count`` counts
+        # every raw BLE notification fed to the parser;
+        # ``_decoded_frame_count`` counts every complete UsbMeterReading
+        # the parser yields. Both are per-window counters reset after
+        # each 30s data-rate INFO summary (see _log_data_rate_summary).
+        self._raw_notification_count: int = 0
+        self._decoded_frame_count: int = 0
+
+        # Set by _notification_callback AFTER a reading is decoded and
+        # published. The polled runner waits on this so it does not
+        # disconnect on a raw fragment before a full frame assembles.
+        # Re-created per polled cycle; the persistent runner ignores it.
+        self._decoded_reading_event: asyncio.Event | None = None
 
         # Resolved issue_tracker URL — cached after first lookup.
         self._issue_url: str | None = None
@@ -589,10 +604,12 @@ class AtorchBleCoordinator(
                 # a 1s heartbeat is plenty responsive for a meter that
                 # ticks at ~1Hz.
                 client = self._client
+                summary_task = self._start_data_rate_summary()
                 try:
                     while client is not None and client.is_connected:
                         await asyncio.sleep(1.0)
                 finally:
+                    await self._cancel_data_rate_summary(summary_task)
                     with contextlib.suppress(Exception):
                         if client is not None:
                             await client.disconnect()
@@ -639,11 +656,94 @@ class AtorchBleCoordinator(
         _LOGGER.debug("bleak disconnect_callback fired (mac=%s)", self.mac_normalized)
 
     # ------------------------------------------------------------------
+    # Data-rate instrumentation
+    # ------------------------------------------------------------------
+
+    def _start_data_rate_summary(self) -> asyncio.Task[None]:
+        """Start the periodic data-rate INFO summary task.
+
+        Resets the per-window counters and spawns a background task that
+        logs one INFO summary every
+        ``DATA_RATE_SUMMARY_INTERVAL_SECONDS`` while a connection is
+        held. Used by both the persistent and polled runners; the
+        caller cancels it via :meth:`_cancel_data_rate_summary` on
+        disconnect.
+        """
+        self._raw_notification_count = 0
+        self._decoded_frame_count = 0
+        return self.hass.async_create_background_task(
+            self._data_rate_summary_loop(),
+            name=f"{DOMAIN}-datarate-{self.mac_normalized}",
+        )
+
+    async def _data_rate_summary_loop(self) -> None:
+        """Log a data-rate INFO summary every 30s until cancelled."""
+        try:
+            while True:
+                await asyncio.sleep(DATA_RATE_SUMMARY_INTERVAL_SECONDS)
+                self._log_data_rate_summary()
+        except asyncio.CancelledError:
+            return
+
+    async def _cancel_data_rate_summary(
+        self, task: asyncio.Task[None] | None
+    ) -> None:
+        """Cancel the data-rate summary task started for a connection."""
+        if task is None or task.done():
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+
+    @callback
+    def _log_data_rate_summary(self) -> None:
+        """Emit one INFO data-rate summary and reset the window counters.
+
+        Reveals whether the meter streams notifications continuously or
+        sends only a token frame after subscription — the open question
+        behind sporadic sensor updates. If a full window passes with no
+        data while a connection is held, the line says so explicitly so
+        the user knows the meter may need a start command.
+        """
+        raw = self._raw_notification_count
+        decoded = self._decoded_frame_count
+        self._raw_notification_count = 0
+        self._decoded_frame_count = 0
+        if raw == 0 and decoded == 0:
+            _LOGGER.info(
+                "Data rate (mac=%s): NO data received in last %ds while "
+                "connected — meter may need a start command",
+                self.mac_normalized,
+                DATA_RATE_SUMMARY_INTERVAL_SECONDS,
+            )
+            return
+        _LOGGER.info(
+            "Data rate (mac=%s): %d raw notifications, %d decoded frames "
+            "in last %ds",
+            self.mac_normalized,
+            raw,
+            decoded,
+            DATA_RATE_SUMMARY_INTERVAL_SECONDS,
+        )
+
+    # ------------------------------------------------------------------
     # Polled-mode runner
     # ------------------------------------------------------------------
 
     async def _run_polled(self) -> None:  # pragma: no cover - requires real bleak loop; covered by smoke test
-        """Connect-read-disconnect each cycle on the configured interval."""
+        """Connect-read-disconnect each cycle on the configured interval.
+
+        The cycle waits for an actual DECODED reading, not a raw BLE
+        notification. A raw notification is usually only a fragment of
+        the 36-byte Atorch frame — the parser reassembles a complete
+        frame from several notifications and only then yields a
+        ``UsbMeterReading``. Waiting on the first raw notification (the
+        pre-v0.1.6 behaviour) disconnected the meter mid-frame, so the
+        parser never produced a reading and polled mode decoded nothing.
+        The runner now subscribes via :meth:`_notification_callback`
+        (which sets :attr:`_decoded_reading_event` after a frame is
+        decoded and published) and waits on that event.
+        """
         backoff = RECONNECT_INITIAL_BACKOFF_SECONDS
         try:
             while True:
@@ -655,15 +755,14 @@ class AtorchBleCoordinator(
                 # a BLEDevice and are actively trying to establish the
                 # GATT connection.
                 self._set_connection_state("disconnected")
-                got_reading = asyncio.Event()
 
-                def _one_shot_callback(
-                    _sender: Any, data: bytearray | bytes
-                ) -> None:
-                    self._notification_callback(_sender, data)
-                    got_reading.set()
+                # Fresh event per cycle. _notification_callback sets it
+                # only after a complete frame decodes and publishes.
+                decoded_event = asyncio.Event()
+                self._decoded_reading_event = decoded_event
 
                 client: BleakClient | None = None
+                summary_task: asyncio.Task[None] | None = None
                 try:
                     ble_device = await self._wait_for_fresh_advertisement()
                     self._set_connection_state("polling")
@@ -680,19 +779,23 @@ class AtorchBleCoordinator(
                         "GATT connection established to %s", self.mac_normalized
                     )
                     self._client = client
+                    summary_task = self._start_data_rate_summary()
                     await client.start_notify(
-                        CHARACTERISTIC_UUID, _one_shot_callback
+                        CHARACTERISTIC_UUID, self._notification_callback
                     )
                     _LOGGER.info(
                         "Subscribed to notifications on %s", self.mac_normalized
                     )
                     try:
+                        # Wait for an actual DECODED reading — not the
+                        # first raw notification fragment.
                         await asyncio.wait_for(
-                            got_reading.wait(),
+                            decoded_event.wait(),
                             timeout=POLLED_NOTIFICATION_TIMEOUT_SECONDS,
                         )
                     except asyncio.TimeoutError as exc:
-                        # Timeout counts as a failure for backoff/repair
+                        # No complete frame assembled within the window.
+                        # Counts as a failure for backoff/repair
                         # tracking, but we still loop on schedule.
                         self._on_connect_failure(exc)
                         backoff = min(
@@ -707,6 +810,8 @@ class AtorchBleCoordinator(
                     self._on_connect_failure(exc)
                     backoff = min(backoff * 2, RECONNECT_MAX_BACKOFF_SECONDS)
                 finally:
+                    self._decoded_reading_event = None
+                    await self._cancel_data_rate_summary(summary_task)
                     if client is not None:
                         with contextlib.suppress(Exception):
                             await client.disconnect()
@@ -888,6 +993,8 @@ class AtorchBleCoordinator(
         """bleak notification callback — sync; schedules async work on hass."""
         now = time.monotonic()
         self._increment_bucket(now, notifs=1, errors=0)
+        # Data-rate instrumentation: count every raw BLE notification.
+        self._raw_notification_count += 1
         # Once-per-session "data flowing" INFO log. Throttled by a flag
         # the runner clears at the start of each connection attempt; the
         # per-frame decoded-reading log below stays at DEBUG because at
@@ -916,6 +1023,9 @@ class AtorchBleCoordinator(
             return
 
         for reading in readings:
+            # Data-rate instrumentation: count every complete decoded
+            # frame the parser reassembled and yielded.
+            self._decoded_frame_count += 1
             _LOGGER.debug(
                 "Decoded reading mac=%s V=%.3f I=%.3f",
                 self.mac_normalized,
@@ -937,6 +1047,12 @@ class AtorchBleCoordinator(
             # call ``async_write_ha_state`` and the HA UI reflects the
             # new value.
             self.async_set_updated_data(self._snapshot())
+            # Wake the polled runner: a complete frame was decoded and
+            # published, so it is now safe to disconnect. The event is
+            # only armed during a polled cycle; persistent mode leaves
+            # it None and this is a no-op.
+            if self._decoded_reading_event is not None:
+                self._decoded_reading_event.set()
 
     # ------------------------------------------------------------------
     # Bucket bookkeeping
