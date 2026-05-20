@@ -10,6 +10,14 @@ Releases are cut by pushing a `vMAJOR.MINOR.PATCH` tag; the
 `custom_components/atorch_ble/` into `atorch_ble.zip` and attaches it
 to the GitHub Release.
 
+## [0.1.7] - 2026-05-19
+
+### Fixed
+- The integration decoded almost no data from a live meter even over a rock-solid BLE connection. The root cause was in the `atorch-ble` parser: USB-meter checksum validation summed the wrong byte range (`payload[2:33]`) and compared it against the wrong frame offset (`payload[0x21]`, a constant data byte), so real J7-C frames failed the checksum gate roughly 99.7% of the time and were silently discarded. A 35-minute production capture showed a steady 30 raw BLE notifications per 30 s but ~0 decoded frames, decoding only on a rare chance collision. The real checksum — `(sum(payload[0x03:0x23]) & 0xFF) ^ 0x44` in the final byte — was reverse-engineered and confirmed against 639 frames captured from a live meter. With `atorch-ble==0.1.1` every well-formed frame decodes. This was the true cause behind the symptoms the v0.1.1–v0.1.6 hotfixes chipped away at.
+
+### Changed
+- Bumped the `atorch-ble` requirement from `0.1.0` to `0.1.1`.
+
 ## [0.1.6] - 2026-05-19
 
 ### Fixed

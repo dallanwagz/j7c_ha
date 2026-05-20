@@ -62,11 +62,12 @@ def auto_mock_bluetooth(mock_bluetooth: None) -> None:
 def build_j7c_frame() -> Callable[..., bytes]:
     """Return a builder for canonical 36-byte J7-C USB-meter payloads.
 
-    The builder writes the documented field layout (magic, direction,
-    packet type, big-endian voltage / current / capacity / energy /
-    duration / temperature, configurable price + currency byte, and the
-    documented ``(sum(payload[2:33]) & 0xFF) ^ 0x44`` checksum at
-    offset 0x21). The remaining bytes are zero-filled.
+    The builder writes the field layout the parser's decoder reads
+    (magic, direction, packet type, big-endian voltage / current /
+    capacity / energy, D+/D- line voltages, temperature, and the
+    days/hours/minutes/seconds duration tuple), then the real Atorch
+    checksum ``(sum(payload[0x03:0x23]) & 0xFF) ^ 0x44`` in the final
+    byte (offset 0x23). Reserved / vendor-framing bytes are zero-filled.
     """
 
     def _build(
@@ -75,10 +76,10 @@ def build_j7c_frame() -> Callable[..., bytes]:
         current_a: float = 1.0,
         capacity_mah: int = 0,
         energy_wh: float = 0.0,
-        price_per_kwh: float = 0.0,
-        currency: int = 0,
-        duration_s: int = 0,
+        voltage_dplus_v: float = 0.0,
+        voltage_dminus_v: float = 0.0,
         temperature_c: int = 25,
+        duration_s: int = 0,
     ) -> bytes:
         frame = bytearray(_FRAME_LEN)
         frame[0:2] = _MAGIC
@@ -88,13 +89,19 @@ def build_j7c_frame() -> Callable[..., bytes]:
         frame[0x07:0x0A] = int(round(current_a * 100)).to_bytes(3, "big")
         frame[0x0A:0x0D] = int(capacity_mah).to_bytes(3, "big")
         frame[0x0D:0x11] = int(round(energy_wh * 100)).to_bytes(4, "big")
-        frame[0x11:0x15] = int(round(price_per_kwh * 100)).to_bytes(4, "big")
-        frame[0x15] = currency & 0xFF
-        frame[0x16:0x1A] = int(duration_s).to_bytes(4, "big")
-        frame[0x1A:0x1C] = int(temperature_c).to_bytes(2, "big")
-        # Checksum lives at 0x21; preceding bytes 0x1C..0x20 are zero.
-        checksum = (sum(frame[2:33]) & 0xFF) ^ 0x44
-        frame[0x21] = checksum
+        frame[0x11:0x13] = int(round(voltage_dplus_v * 100)).to_bytes(2, "big")
+        frame[0x13:0x15] = int(round(voltage_dminus_v * 100)).to_bytes(2, "big")
+        frame[0x15:0x17] = int(temperature_c).to_bytes(2, "big")
+        days, rem = divmod(int(duration_s), 86400)
+        hours, rem = divmod(rem, 3600)
+        minutes, seconds = divmod(rem, 60)
+        frame[0x17] = days
+        frame[0x18] = hours
+        frame[0x19] = minutes
+        frame[0x1A] = seconds
+        # 0x1B..0x22 reserved / vendor framing (zero-filled).
+        checksum = (sum(frame[0x03:0x23]) & 0xFF) ^ 0x44
+        frame[0x23] = checksum
         return bytes(frame)
 
     return _build
