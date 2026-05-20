@@ -21,6 +21,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 
+from homeassistant.components.bluetooth.passive_update_coordinator import (
+    PassiveBluetoothCoordinatorEntity,
+)
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -41,7 +44,6 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import StateType
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util.dt import utcnow
 
 from .const import CONNECTION_STATES, DOMAIN
@@ -203,7 +205,9 @@ DESCRIPTIONS: tuple[AtorchBleSensorEntityDescription, ...] = (
 )
 
 
-class AtorchBleSensor(CoordinatorEntity[AtorchBleCoordinator], SensorEntity):
+class AtorchBleSensor(
+    PassiveBluetoothCoordinatorEntity[AtorchBleCoordinator], SensorEntity
+):
     """Sensor entity backed by the atorch_ble coordinator.
 
     Variation across the five primary sensors (and future additions)
@@ -274,6 +278,9 @@ class AtorchBleSensor(CoordinatorEntity[AtorchBleCoordinator], SensorEntity):
         and would otherwise be permanently unavailable. ``super().available``
         is also not consulted: freshness is the authoritative signal.
         """
+        # This override deliberately supersedes
+        # PassiveBluetoothCoordinatorEntity.available (advertisement-driven,
+        # not measurement-freshness driven).
         if self.entity_description.value_fn_coordinator is not None:
             return True
         last_seen = self.coordinator.last_seen

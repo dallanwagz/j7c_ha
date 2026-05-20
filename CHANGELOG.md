@@ -10,6 +10,12 @@ Releases are cut by pushing a `vMAJOR.MINOR.PATCH` tag; the
 `custom_components/atorch_ble/` into `atorch_ble.zip` and attaches it
 to the GitHub Release.
 
+## [0.1.8] - 2026-05-19
+
+### Changed
+- Migrated the coordinator from `ActiveBluetoothProcessorCoordinator` to `ActiveBluetoothDataUpdateCoordinator` (the bluetooth "coordinator" branch instead of the "processor" branch). This is an internal architecture change with no user-facing behavior difference. `ActiveBluetoothDataUpdateCoordinator` natively provides the `DataUpdateCoordinator`-style subscription surface (`async_add_listener` / `async_update_listeners` / `async_contexts` / `self.data`), so the integration no longer carries a hand-rolled, non-idiomatic listener shim that re-implemented those methods on top of the processor base. Sensor entities now subscribe through HA's native `PassiveBluetoothCoordinatorEntity`. This brings the integration closer to HA Core idioms and HA-Core-readiness.
+- Polled-mode cadence is now advertisement-gated. The framework's poll debouncer drives a poll on the next BLE advertisement once `poll_interval_seconds` has elapsed since the last poll, so the effective cadence is "approximately every `poll_interval_seconds`, on the next advertisement after the interval elapses". A meter advertising infrequently while idle may therefore poll slightly slower than its configured interval. This also corrects a latent bug in the old `needs_poll` check, which treated the framework's seconds-since-last-poll value as an absolute timestamp.
+
 ## [0.1.7] - 2026-05-19
 
 ### Fixed

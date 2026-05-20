@@ -56,7 +56,7 @@ Switching `connection_mode` applies live — no restart needed.
 | Mode | Latency | Slot usage | When to choose |
 |------|---------|------------|----------------|
 | **Persistent** | ~1 Hz updates | Holds **one ESPHome-proxy connection slot continuously per meter** | Slot budget allows; you want fast updates |
-| **Polled** | One frame every `poll_interval_seconds` (10–3600 s) | Briefly occupies a slot per poll, otherwise idle | Proxy slots are scarce; multiple meters share one proxy |
+| **Polled** | One frame approximately every `poll_interval_seconds` (10–3600 s), on the next advertisement after the interval elapses | Briefly occupies a slot per poll, otherwise idle | Proxy slots are scarce; multiple meters share one proxy |
 
 **Slot-arithmetic rule of thumb:** A typical ESP32 ESPHome BT proxy supports about **3 simultaneous BLE connections**. If you have more meters than the proxy has slots minus one (reserve at least one slot for other BLE devices), choose **Polled** mode for at least the extras. In formula terms, recommend polled when `N_meters > slots - 1`.
 
@@ -81,7 +81,7 @@ The integration exposes 10 entities per meter. "Default enabled" entities are vi
 
 ## First install — what to expect
 
-After confirming the device, sensors may show 'Unknown' for up to one poll interval (1s in persistent mode, 10–3600s in polled mode) until the first measurement arrives. If they remain Unknown for several minutes, see Troubleshooting.
+After confirming the device, sensors may show 'Unknown' until the first measurement arrives — about 1s in persistent mode, and approximately one poll interval (10–3600s) in polled mode, where each poll fires on the next advertisement after the interval elapses. If they remain Unknown for several minutes, see Troubleshooting.
 
 Sensors will show **Unknown** or **Unavailable** until the first measurement arrives — typically <5 seconds in persistent mode, up to your configured poll interval in polled mode.
 
@@ -115,6 +115,8 @@ A "rebind to new MAC" reconfigure flow that preserves the existing config entry 
 ### Sensors Unknown for longer than expected
 
 See the *First install — what to expect* section above for normal-acquisition windows. If sensors stay Unknown beyond those windows, check the **Connection state** diagnostic sensor (enable it if needed) and download diagnostics (below).
+
+In polled mode the poll cadence is gated on Bluetooth advertisements: a poll fires on the next advertisement after the configured interval has elapsed, so a meter that advertises infrequently while idle may poll slower than its configured `poll_interval_seconds`.
 
 ### Unsupported device variant (repair issue)
 

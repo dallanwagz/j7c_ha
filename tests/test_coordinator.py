@@ -487,34 +487,46 @@ async def test_snapshot_returns_none_until_first_reading(
     assert snap.power_w == 10.0
 
 
-async def test_update_method_and_poll_method(
+async def test_poll_method_returns_none_until_first_reading(
     hass: HomeAssistant,
 ) -> None:
-    """ActiveBluetoothProcessorCoordinator hooks pass through to _snapshot."""
+    """The connected-guard fast path of _poll_method returns the snapshot.
+
+    With a client already connected (the re-entrancy guard from
+    decision #2), _poll_method short-circuits and returns whatever
+    _snapshot() yields — None pre-first-reading.
+    """
     _, coordinator = await _setup(hass)
-    # Both methods return None pre-first-reading.
-    assert coordinator._update_method(MagicMock()) is None
+    fake_client = MagicMock()
+    fake_client.is_connected = True
+    coordinator._client = fake_client
     assert await coordinator._poll_method(MagicMock()) is None
 
 
 async def test_needs_poll_method_persistent(hass: HomeAssistant) -> None:
-    """Persistent mode polls only when no client is connected."""
+    """Persistent mode never polls — the streaming runner owns the connection."""
     _, coordinator = await _setup(
         hass, options={CONF_CONNECTION_MODE: MODE_PERSISTENT}
     )
-    assert coordinator._needs_poll_method(MagicMock(), None) is True
+    # Persistent mode returns False unconditionally, regardless of
+    # last_poll value or client state.
+    assert coordinator._needs_poll_method(MagicMock(), None) is False
+    assert coordinator._needs_poll_method(MagicMock(), 0.0) is False
+    assert coordinator._needs_poll_method(MagicMock(), 9999.0) is False
 
     fake_client = MagicMock()
-    fake_client.is_connected = True
+    fake_client.is_connected = False
     coordinator._client = fake_client
     assert coordinator._needs_poll_method(MagicMock(), 0.0) is False
 
-    fake_client.is_connected = False
-    assert coordinator._needs_poll_method(MagicMock(), 0.0) is True
-
 
 async def test_needs_poll_method_polled(hass: HomeAssistant) -> None:
-    """Polled mode polls based on elapsed time vs. interval."""
+    """Polled mode polls when seconds-since-last-poll meets the interval.
+
+    ``last_poll`` is passed by the base as seconds since the last poll
+    (not an absolute timestamp), so the comparison is direct: a poll is
+    due when ``last_poll`` is None or >= the configured interval.
+    """
     _, coordinator = await _setup(
         hass,
         options={
@@ -524,18 +536,12 @@ async def test_needs_poll_method_polled(hass: HomeAssistant) -> None:
     )
     # last_poll None -> always polls.
     assert coordinator._needs_poll_method(MagicMock(), None) is True
-    with patch(
-        "custom_components.atorch_ble.coordinator.time.monotonic",
-        return_value=30.0,
-    ):
-        # 30s elapsed against a 60s interval — no poll yet.
-        assert coordinator._needs_poll_method(MagicMock(), 0.0) is False
-    with patch(
-        "custom_components.atorch_ble.coordinator.time.monotonic",
-        return_value=70.0,
-    ):
-        # 70s elapsed — poll due.
-        assert coordinator._needs_poll_method(MagicMock(), 0.0) is True
+    # 30s since last poll against a 60s interval — no poll yet.
+    assert coordinator._needs_poll_method(MagicMock(), 30.0) is False
+    # 70s since last poll — poll due.
+    assert coordinator._needs_poll_method(MagicMock(), 70.0) is True
+    # Exactly at the interval — poll due.
+    assert coordinator._needs_poll_method(MagicMock(), 60.0) is True
 
 
 async def test_options_update_changes_mode(hass: HomeAssistant) -> None:
@@ -900,6 +906,43 @@ async def test_notification_callback_valid_frame(
     assert abs(coordinator.last_reading.current_a - 1.5) < 0.01
 
 
+async def test_notification_callback_fires_native_listeners(
+    hass: HomeAssistant, build_j7c_frame
+) -> None:
+    """A decoded frame fires native listeners and updates coordinator.data.
+
+    Listeners registered through the base class's native
+    ``async_add_listener`` must be invoked when ``_notification_callback``
+    publishes a snapshot, and ``coordinator.data`` must reflect it.
+    """
+    _, coordinator = await _setup(hass)
+    calls: list[None] = []
+    coordinator.async_add_listener(lambda: calls.append(None))
+
+    assert coordinator.data is None
+    coordinator._notification_callback(None, build_j7c_frame(voltage_v=5.0, current_a=2.0))
+    await hass.async_block_till_done()
+
+    assert calls, "native listener was not fired on a decoded frame"
+    assert coordinator.data is not None
+    assert coordinator.data.power_w == 10.0
+
+
+async def test_async_add_listener_honors_context(hass: HomeAssistant) -> None:
+    """async_add_listener stores ``context`` and exposes it via async_contexts.
+
+    The native base-class listener registry tracks a per-listener
+    context object; ``async_contexts()`` yields the non-None contexts.
+    """
+    _, coordinator = await _setup(hass)
+    sentinel = object()
+    remove = coordinator.async_add_listener(lambda: None, context=sentinel)
+
+    assert sentinel in set(coordinator.async_contexts())
+    remove()
+    assert sentinel not in set(coordinator.async_contexts())
+
+
 async def test_notification_callback_unsupported_packet(
     hass: HomeAssistant,
 ) -> None:
@@ -1018,17 +1061,29 @@ async def test_decoded_reading_event_none_is_noop(
     assert coordinator.last_reading is not None
 
 
-async def test_run_polled_does_not_disconnect_until_decoded_reading(
+def _poll_service_info() -> MagicMock:
+    """Return a fake service_info whose ``device`` is not a BLEDevice.
+
+    Forces _poll_method onto the advertisement-wait fallback path so
+    tests can patch ``_wait_for_fresh_advertisement`` to supply a
+    controlled BLEDevice.
+    """
+    service_info = MagicMock()
+    service_info.device = None
+    return service_info
+
+
+async def test_poll_method_does_not_disconnect_until_decoded_reading(
     hass: HomeAssistant, build_j7c_frame
 ) -> None:
-    """The polled runner holds the connection until a frame fully decodes.
+    """_poll_method holds the connection until a frame fully decodes.
 
-    Regression test for the v0.1.6 production bug: the runner used to
-    call ``got_reading.set()`` on the first raw notification, which is
-    typically just a fragment, and disconnected before the parser could
-    reassemble a complete 36-byte frame. The runner must now keep the
-    connection open across fragmented notifications and disconnect only
-    after a decoded ``UsbMeterReading`` is published.
+    Regression coverage for the v0.1.6 production bug: the cycle used to
+    disconnect on the first raw notification, which is typically just a
+    fragment, before the parser could reassemble a complete 36-byte
+    frame. _poll_method must keep the connection open across fragmented
+    notifications and disconnect only after a decoded ``UsbMeterReading``
+    is published.
     """
     _, coordinator = await _setup(
         hass, options={CONF_CONNECTION_MODE: MODE_POLLED}
@@ -1036,6 +1091,7 @@ async def test_run_polled_does_not_disconnect_until_decoded_reading(
 
     fake_device = MagicMock(spec=BLEDevice)
     fake_client = MagicMock()
+    fake_client.is_connected = False
     disconnect_calls: list[None] = []
 
     async def _fake_disconnect() -> None:
@@ -1066,20 +1122,160 @@ async def test_run_polled_does_not_disconnect_until_decoded_reading(
         "custom_components.atorch_ble.coordinator.establish_connection",
         _fake_establish,
     ):
-        task = hass.async_create_task(coordinator._run_polled())
-        # Let the first cycle run to completion (it sleeps before cycle 2).
-        for _ in range(20):
-            await asyncio.sleep(0)
-            if coordinator.last_reading is not None and disconnect_calls:
-                break
-        # The runner swallows CancelledError and returns cleanly.
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
+        result = await coordinator._poll_method(_poll_service_info())
 
     # A complete reading was decoded ...
     assert coordinator.last_reading is not None
+    # ... the snapshot is returned ...
+    assert result is not None
+    assert result.power_w == 24.0
     # ... and the disconnect happened only after that.
+    assert len(disconnect_calls) >= 1
+
+
+async def test_poll_method_happy_path_uses_service_info_device(
+    hass: HomeAssistant, build_j7c_frame, make_service_info
+) -> None:
+    """_poll_method prefers the BLEDevice carried on service_info.
+
+    When ``service_info.device`` is a real BLEDevice, _poll_method must
+    connect with it directly and never fall through to the
+    advertisement-wait helper.
+    """
+    _, coordinator = await _setup(
+        hass, options={CONF_CONNECTION_MODE: MODE_POLLED}
+    )
+
+    service_info = make_service_info(name="UC96_BLE", address=TEST_MAC_NORMALIZED)
+
+    fake_client = MagicMock()
+    fake_client.is_connected = False
+    disconnect_calls: list[None] = []
+
+    async def _fake_disconnect() -> None:
+        disconnect_calls.append(None)
+
+    fake_client.disconnect = _fake_disconnect
+
+    frame = build_j7c_frame(voltage_v=5.0, current_a=1.0)
+
+    async def _fake_start_notify(_uuid, callback) -> None:
+        callback(None, frame)
+
+    fake_client.start_notify = _fake_start_notify
+
+    establish_args: dict[str, object] = {}
+
+    async def _fake_establish(_cls, device, _name, **_kwargs):
+        establish_args["device"] = device
+        return fake_client
+
+    async def _fail_wait_for_adv():
+        raise AssertionError("advertisement-wait must not be used")
+
+    with patch.object(
+        coordinator, "_wait_for_fresh_advertisement", _fail_wait_for_adv
+    ), patch(
+        "custom_components.atorch_ble.coordinator.establish_connection",
+        _fake_establish,
+    ):
+        result = await coordinator._poll_method(service_info)
+
+    assert result is not None
+    assert result.power_w == 5.0
+    assert establish_args["device"] is service_info.device
+    assert len(disconnect_calls) >= 1
+
+
+async def test_poll_method_raises_bleak_error_on_connect_failure(
+    hass: HomeAssistant,
+) -> None:
+    """_poll_method propagates a BleakError when the connection fails.
+
+    A connect-layer BleakError must be re-raised so the base coordinator
+    records ``last_poll_successful=False``. The failure is also counted
+    for backoff/repair tracking.
+    """
+    _, coordinator = await _setup(
+        hass, options={CONF_CONNECTION_MODE: MODE_POLLED}
+    )
+
+    fake_device = MagicMock(spec=BLEDevice)
+
+    async def _fake_wait_for_adv():
+        return fake_device
+
+    async def _fake_establish(*_args, **_kwargs):
+        raise BleakError("connect failed")
+
+    failures_before = coordinator._consecutive_connect_failures
+    with patch.object(
+        coordinator, "_wait_for_fresh_advertisement", _fake_wait_for_adv
+    ), patch(
+        "custom_components.atorch_ble.coordinator.establish_connection",
+        _fake_establish,
+    ):
+        with pytest.raises(BleakError, match="connect failed"):
+            await coordinator._poll_method(_poll_service_info())
+
+    # The failure was recorded exactly once for backoff/repair tracking.
+    assert coordinator._consecutive_connect_failures == failures_before + 1
+    # The client handle is cleared after the failed cycle.
+    assert coordinator._client is None
+
+
+async def test_poll_method_raises_bleak_error_on_decode_timeout(
+    hass: HomeAssistant,
+) -> None:
+    """_poll_method raises a BleakError when no frame decodes in time.
+
+    A connection succeeds but no complete frame assembles within
+    ``POLLED_NOTIFICATION_TIMEOUT_SECONDS``. The cycle surfaces a
+    BleakError so the base records ``last_poll_successful=False``, and
+    disconnects cleanly.
+    """
+    _, coordinator = await _setup(
+        hass, options={CONF_CONNECTION_MODE: MODE_POLLED}
+    )
+
+    fake_device = MagicMock(spec=BLEDevice)
+    fake_client = MagicMock()
+    fake_client.is_connected = False
+    disconnect_calls: list[None] = []
+
+    async def _fake_disconnect() -> None:
+        disconnect_calls.append(None)
+
+    fake_client.disconnect = _fake_disconnect
+
+    async def _fake_start_notify(_uuid, _callback) -> None:
+        # Never deliver a frame — the decoded-reading wait times out.
+        return None
+
+    fake_client.start_notify = _fake_start_notify
+
+    async def _fake_establish(*_args, **_kwargs):
+        return fake_client
+
+    async def _fake_wait_for_adv():
+        return fake_device
+
+    failures_before = coordinator._consecutive_connect_failures
+    with patch.object(
+        coordinator, "_wait_for_fresh_advertisement", _fake_wait_for_adv
+    ), patch(
+        "custom_components.atorch_ble.coordinator.establish_connection",
+        _fake_establish,
+    ), patch(
+        "custom_components.atorch_ble.coordinator."
+        "POLLED_NOTIFICATION_TIMEOUT_SECONDS",
+        0.01,
+    ):
+        with pytest.raises(BleakError, match="No decoded reading"):
+            await coordinator._poll_method(_poll_service_info())
+
+    assert coordinator._consecutive_connect_failures == failures_before + 1
+    assert coordinator._client is None
     assert len(disconnect_calls) >= 1
 
 

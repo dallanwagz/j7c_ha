@@ -1,22 +1,29 @@
 """Coordinator for the atorch_ble integration.
 
 Owns the BLE connection lifecycle to a single Atorch USB-meter (J7-C
-family) and republishes parsed :class:`UsbMeterReading` frames via a
-:class:`ActiveBluetoothProcessorCoordinator`. Two operating modes are
+family) and republishes parsed :class:`UsbMeterReading` frames via an
+:class:`ActiveBluetoothDataUpdateCoordinator`. Two operating modes are
 supported:
 
 * **persistent** — hold a continuous GATT connection and subscribe to
   notifications on :data:`~atorch_ble.const.CHARACTERISTIC_UUID`. The
   notification stream drives data freshness. On disconnect the runner
-  reconnects with capped exponential backoff.
-* **polled** — every ``poll_interval_seconds``: connect, await one
-  notification, disconnect, sleep. Easier on ESPHome-proxy connection
-  slot budgets.
+  reconnects with capped exponential backoff. The persistent streaming
+  runner owns the entire connection lifecycle; the framework poll
+  debouncer is deliberately never armed in this mode.
+* **polled** — connect, await one decoded frame, disconnect. The
+  framework's advertisement-gated poll debouncer drives the cadence:
+  :meth:`_poll_method` runs on the next advertisement after
+  ``poll_interval_seconds`` has elapsed since the last poll, so the
+  effective cadence is "approximately every ``poll_interval_seconds``,
+  gated on advertisement reception". Easier on ESPHome-proxy
+  connection slot budgets.
 
-The two modes are implemented by a single private ``_runner`` task that
-calls a mode-specific inner coroutine. Mode and interval changes from
-the options flow drain the active runner and start a new one in place
-via the options-update listener — no HA restart required, and HA-side
+In persistent mode a single private ``_runner`` task holds the
+connection; in polled mode there is no runner — the framework
+debouncer calls :meth:`_poll_method` directly. Mode and interval
+changes from the options flow drain any active runner and re-arm via
+the options-update listener — no HA restart required, and HA-side
 ``last_reading``/``last_seen`` survive the transition.
 
 Repair issues, device-registry ``model`` sync, and config-entry title
@@ -24,23 +31,19 @@ rewriting for unsupported packet types are all driven from the
 notification callback path; see :meth:`_handle_unsupported_packet_type`
 and :meth:`_handle_decoded_frame`.
 
-**Listener-shim rationale.** :class:`PassiveBluetoothProcessorEntity`
-is the native HA entity class for
-:class:`~homeassistant.components.bluetooth.active_update_processor.ActiveBluetoothProcessorCoordinator`,
-but it is advertisement-driven: entities refresh on each BLE
-advertisement received by the scanner. Atorch measurements arrive via
-GATT notifications, not advertisements — the advertisement stream is
-only used for discovery and as a liveness trigger for the framework's
-``needs_poll_method`` hook. Using ``PassiveBluetoothProcessorEntity``
-directly would therefore produce entities that only update when an
-advertisement is seen, not when a measurement arrives. Instead,
-:class:`AtorchBleCoordinator` inherits from
-:class:`~homeassistant.helpers.update_coordinator.CoordinatorEntity`
-(via ``CoordinatorEntity[AtorchBleCoordinator]`` in ``sensor.py``) and
-shims the ``async_add_listener`` / ``async_set_updated_data`` methods
-that ``CoordinatorEntity.async_added_to_hass`` expects. This gives
-entities the correct ``DataUpdateCoordinator``-style subscription
-semantics driven by GATT notification delivery.
+**Base-class rationale.** :class:`AtorchBleCoordinator` extends
+:class:`~homeassistant.components.bluetooth.active_update_coordinator.ActiveBluetoothDataUpdateCoordinator`,
+which itself extends ``PassiveBluetoothDataUpdateCoordinator`` (the
+bluetooth "coordinator" branch, not the "processor" branch). That base
+class natively provides the ``DataUpdateCoordinator``-style
+subscription surface — ``async_add_listener`` /
+``async_update_listeners`` / ``async_contexts`` / ``self.data`` — so
+sensor entities subscribe through :class:`PassiveBluetoothCoordinatorEntity`
+with no hand-rolled listener shim. Atorch measurements arrive via GATT
+notifications, not advertisements; the notification callback path
+assigns ``self.data`` and calls ``async_update_listeners()`` directly,
+giving entities update semantics driven by GATT notification delivery
+rather than advertisement reception.
 
 **Repair-issue dismissal asymmetry.** Two repair issues are raised with
 deliberately different dismissal persistence:
@@ -92,12 +95,12 @@ from homeassistant.components.bluetooth import (
     BluetoothScanningMode,
     BluetoothServiceInfoBleak,
 )
-from homeassistant.components.bluetooth.active_update_processor import (
-    ActiveBluetoothProcessorCoordinator,
+from homeassistant.components.bluetooth.active_update_coordinator import (
+    ActiveBluetoothDataUpdateCoordinator,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS
-from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.device_registry import format_mac
@@ -156,7 +159,7 @@ class AtorchBleData:
 
 
 class AtorchBleCoordinator(
-    ActiveBluetoothProcessorCoordinator[AtorchBleData | None]
+    ActiveBluetoothDataUpdateCoordinator[AtorchBleData | None]
 ):
     """Active-Bluetooth coordinator for an Atorch USB-meter config entry.
 
@@ -259,34 +262,14 @@ class AtorchBleCoordinator(
         # coordinator is live; used to gate option-update transitions.
         self._started: bool = False
 
-        # Latest published snapshot. ``CoordinatorEntity`` and our sensor
-        # entity both read ``coordinator.data``; the
-        # ``PassiveBluetoothProcessorCoordinator`` base does not expose
-        # this attribute (it dispatches updates through registered
-        # processors instead), so we maintain it ourselves and refresh
-        # it from inside ``async_set_updated_data``.
-        self.data: AtorchBleData | None = None
-
-        # CoordinatorEntity listener registry.
-        # ``ActiveBluetoothProcessorCoordinator`` extends
-        # ``PassiveBluetoothProcessorCoordinator``, NOT ``DataUpdateCoordinator``,
-        # so the ``async_add_listener`` method that
-        # ``CoordinatorEntity.async_added_to_hass`` invokes is absent from the
-        # base class. Without this shim, every entity raises ``AttributeError``
-        # the moment HA tries to subscribe it, and sensors would never receive
-        # coordinator updates at runtime. The shim mirrors the
-        # ``DataUpdateCoordinator`` API surface that ``CoordinatorEntity``
-        # depends on: callable registration + idempotent removal.
-        self._listeners: list[CALLBACK_TYPE] = []
-
         super().__init__(
-            hass=hass,
+            hass,
             logger=_LOGGER,
             address=entry.data[CONF_ADDRESS],
             mode=BluetoothScanningMode.ACTIVE,
-            update_method=self._update_method,
             needs_poll_method=self._needs_poll_method,
             poll_method=self._poll_method,
+            connectable=True,
         )
 
         # Register the options-update listener via async_on_unload so HA
@@ -348,57 +331,8 @@ class AtorchBleCoordinator(
         return total_errors / max(1, total_notifs)
 
     # ------------------------------------------------------------------
-    # CoordinatorEntity listener-registry shim
+    # Connection-state setter
     # ------------------------------------------------------------------
-
-    @callback
-    def async_add_listener(
-        self, update_callback: CALLBACK_TYPE, context: Any = None
-    ) -> CALLBACK_TYPE:
-        """Register a listener for entity updates.
-
-        Mirrors ``DataUpdateCoordinator.async_add_listener`` so that
-        ``CoordinatorEntity.async_added_to_hass`` can subscribe entities
-        without ``AttributeError``. ``context`` is accepted for API
-        parity but unused — every listener gets every update.
-        """
-        @callback
-        def remove_listener() -> None:
-            if update_callback in self._listeners:
-                self._listeners.remove(update_callback)
-
-        self._listeners.append(update_callback)
-        return remove_listener
-
-    @callback
-    def async_set_updated_data(self, update: AtorchBleData | None) -> None:
-        """Publish a fresh snapshot.
-
-        Wraps the base coordinator's dispatch with two responsibilities
-        the base class does NOT cover:
-
-        * Update ``self.data`` so that ``CoordinatorEntity.coordinator.data``
-          (the canonical read path for sensor entities) reflects the
-          latest snapshot. ``PassiveBluetoothProcessorCoordinator`` only
-          fans out to registered processors and never stores ``data``.
-        * Notify the entity listener registry so ``CoordinatorEntity``
-          subscribers call ``async_write_ha_state`` and HA's state
-          machine picks up the new value.
-        """
-        self.data = update
-        super().async_set_updated_data(update)
-        self._async_notify_listeners()
-
-    @callback
-    def _async_notify_listeners(self) -> None:
-        """Invoke all registered listeners.
-
-        Called whenever a fresh data snapshot is published. Iterates a
-        copy so listener-side ``async_on_remove`` callbacks that mutate
-        the list during iteration are safe.
-        """
-        for cb in list(self._listeners):
-            cb()
 
     @callback
     def _set_connection_state(self, value: str) -> None:
@@ -415,7 +349,7 @@ class AtorchBleCoordinator(
         if self._connection_state == value:
             return
         self._connection_state = value
-        self._async_notify_listeners()
+        self.async_update_listeners()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -441,21 +375,8 @@ class AtorchBleCoordinator(
         await self._stop_runner()
 
     # ------------------------------------------------------------------
-    # ActiveBluetoothProcessorCoordinator hooks
+    # ActiveBluetoothDataUpdateCoordinator hooks
     # ------------------------------------------------------------------
-
-    @callback
-    def _update_method(
-        self, service_info: BluetoothServiceInfoBleak
-    ) -> AtorchBleData | None:
-        """Return the most-recent published snapshot.
-
-        Atorch meters do not encode measurements in advertisements — the
-        data comes from GATT notifications — so this hook is essentially
-        a passthrough that returns the latest data the notification path
-        has stored.
-        """
-        return self._snapshot()
 
     @callback
     def _needs_poll_method(
@@ -465,28 +386,117 @@ class AtorchBleCoordinator(
     ) -> bool:
         """Tell the framework whether to invoke ``poll_method`` now.
 
-        * Persistent mode: only when no connection is held — the
-          framework "polls" us to (re)establish the subscription.
-        * Polled mode: when the interval has elapsed since the last
-          successful poll.
+        * **Persistent mode** — always ``False``. The persistent
+          streaming runner owns the entire connection lifecycle; the
+          framework poll debouncer must never fire :meth:`_poll_method`
+          in this mode.
+        * **Polled mode** — ``True`` when ``poll_interval_seconds`` has
+          elapsed since the last poll. ``last_poll`` is passed by the
+          base as **seconds since the last poll** (or ``None`` if no
+          poll has happened yet), NOT an absolute timestamp.
         """
         if self._connection_mode == MODE_PERSISTENT:
-            return self._client is None or not self._client.is_connected
-        if last_poll is None:
-            return True
-        return (time.monotonic() - last_poll) >= self._poll_interval_seconds
+            return False
+        return (
+            last_poll is None or last_poll >= self._poll_interval_seconds
+        )
 
     async def _poll_method(
         self, service_info: BluetoothServiceInfoBleak
     ) -> AtorchBleData | None:
-        """Return the latest snapshot.
+        """Connect, await one decoded frame, disconnect; return a snapshot.
 
-        The actual connect/notify logic lives in :meth:`_run_persistent`
-        and :meth:`_run_polled` (driven by ``_runner_task``); this hook
-        exists only to satisfy the framework contract and surface the
-        most recent data.
+        Driven by the framework poll debouncer in polled mode only —
+        :meth:`_needs_poll_method` returns ``False`` unconditionally in
+        persistent mode, so this coroutine never runs while the
+        persistent runner holds a connection. As a belt-and-braces
+        guard against a stray invocation, it bails out early if a client
+        is already connected.
+
+        The cycle waits for an actual DECODED reading, not a raw BLE
+        notification. A raw notification is usually only a fragment of
+        the 36-byte Atorch frame — the parser reassembles a complete
+        frame from several notifications and only then yields a
+        ``UsbMeterReading``. The runner subscribes via
+        :meth:`_notification_callback` (which sets
+        :attr:`_decoded_reading_event` after a frame is decoded and
+        published) and waits on that event.
+
+        Raises :class:`BleakError` on connect or timeout failure so the
+        base records ``last_poll_successful=False``.
         """
-        return self._snapshot()
+        # Re-entrancy guard (decision #2): in polled mode there is no
+        # persistent runner, so a connected client here would only mean
+        # a previous poll is still in flight. Bail rather than stack a
+        # second connection.
+        if self._client is not None and self._client.is_connected:
+            return self._snapshot()
+
+        decoded_event = asyncio.Event()
+        self._decoded_reading_event = decoded_event
+
+        client: BleakClient | None = None
+        summary_task: asyncio.Task[None] | None = None
+        try:
+            # Prefer the BLEDevice carried on the advertisement that
+            # triggered this poll; fall back to the advertisement-wait
+            # helper when service_info has no usable device.
+            ble_device = getattr(service_info, "device", None)
+            if not isinstance(ble_device, BLEDevice):
+                ble_device = await self._wait_for_fresh_advertisement()
+
+            self._set_connection_state("polling")
+            self._first_notification_logged = False
+            _LOGGER.info("Attempting GATT connection to %s", self.mac_normalized)
+            client = await establish_connection(
+                BleakClientWithServiceCache,
+                ble_device,
+                f"{DOMAIN}-{self.mac_normalized}",
+            )
+            _LOGGER.info(
+                "GATT connection established to %s", self.mac_normalized
+            )
+            self._client = client
+            summary_task = self._start_data_rate_summary()
+            await client.start_notify(
+                CHARACTERISTIC_UUID, self._notification_callback
+            )
+            _LOGGER.info(
+                "Subscribed to notifications on %s", self.mac_normalized
+            )
+            try:
+                # Wait for an actual DECODED reading — not the first
+                # raw notification fragment.
+                await asyncio.wait_for(
+                    decoded_event.wait(),
+                    timeout=POLLED_NOTIFICATION_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError as exc:
+                # No complete frame assembled within the window. Surface
+                # as a BleakError so the base marks the poll unsuccessful.
+                raise BleakError(
+                    f"No decoded reading from {self.mac_normalized} within "
+                    f"{POLLED_NOTIFICATION_TIMEOUT_SECONDS}s"
+                ) from exc
+            self._on_connect_success()
+            return self._snapshot()
+        except BleakError as exc:
+            # A connect, subscribe, advertisement-wait, or decoded-frame
+            # timeout failure — record it once for backoff/repair
+            # tracking, then re-raise so the base records
+            # last_poll_successful=False.
+            self._on_connect_failure(exc)
+            raise
+        finally:
+            self._decoded_reading_event = None
+            await self._cancel_data_rate_summary(summary_task)
+            if client is not None:
+                with contextlib.suppress(Exception):
+                    await client.disconnect()
+                _LOGGER.info("Disconnected from %s", self.mac_normalized)
+            self._client = None
+            if self._connection_state != "failed_after_setup":
+                self._set_connection_state("disconnected")
 
     def _snapshot(self) -> AtorchBleData | None:
         if self._last_reading is None:
@@ -549,16 +559,21 @@ class AtorchBleCoordinator(
     # ------------------------------------------------------------------
 
     def _start_runner(self) -> None:
+        """Spawn the persistent streaming runner; no-op in polled mode.
+
+        Only persistent mode needs a long-lived runner task to hold the
+        GATT connection. In polled mode the framework poll debouncer
+        drives :meth:`_poll_method` directly on advertisement reception,
+        so there is nothing to start. Kept named ``_start_runner`` as it
+        is a test patch seam.
+        """
+        if self._connection_mode != MODE_PERSISTENT:
+            return
         if self._runner_task is not None and not self._runner_task.done():
             return
-        if self._connection_mode == MODE_PERSISTENT:
-            self._runner_task = self.hass.async_create_background_task(
-                self._run_persistent(), name=f"{DOMAIN}-runner-{self.mac_normalized}"
-            )
-        else:
-            self._runner_task = self.hass.async_create_background_task(
-                self._run_polled(), name=f"{DOMAIN}-runner-{self.mac_normalized}"
-            )
+        self._runner_task = self.hass.async_create_background_task(
+            self._run_persistent(), name=f"{DOMAIN}-runner-{self.mac_normalized}"
+        )
 
     async def _stop_runner(self) -> None:
         task = self._runner_task
@@ -725,113 +740,6 @@ class AtorchBleCoordinator(
             decoded,
             DATA_RATE_SUMMARY_INTERVAL_SECONDS,
         )
-
-    # ------------------------------------------------------------------
-    # Polled-mode runner
-    # ------------------------------------------------------------------
-
-    async def _run_polled(self) -> None:  # pragma: no cover - requires real bleak loop; covered by smoke test
-        """Connect-read-disconnect each cycle on the configured interval.
-
-        The cycle waits for an actual DECODED reading, not a raw BLE
-        notification. A raw notification is usually only a fragment of
-        the 36-byte Atorch frame — the parser reassembles a complete
-        frame from several notifications and only then yields a
-        ``UsbMeterReading``. Waiting on the first raw notification (the
-        pre-v0.1.6 behaviour) disconnected the meter mid-frame, so the
-        parser never produced a reading and polled mode decoded nothing.
-        The runner now subscribes via :meth:`_notification_callback`
-        (which sets :attr:`_decoded_reading_event` after a frame is
-        decoded and published) and waits on that event.
-        """
-        backoff = RECONNECT_INITIAL_BACKOFF_SECONDS
-        try:
-            while True:
-                # Stay "disconnected" while we wait for an advertisement
-                # — the wait can take up to ADVERTISEMENT_WAIT_TIMEOUT_SECONDS
-                # (default 600s) and reporting "polling" during that
-                # window misleads users into thinking the meter is
-                # connected. Transition to "polling" only once we have
-                # a BLEDevice and are actively trying to establish the
-                # GATT connection.
-                self._set_connection_state("disconnected")
-
-                # Fresh event per cycle. _notification_callback sets it
-                # only after a complete frame decodes and publishes.
-                decoded_event = asyncio.Event()
-                self._decoded_reading_event = decoded_event
-
-                client: BleakClient | None = None
-                summary_task: asyncio.Task[None] | None = None
-                try:
-                    ble_device = await self._wait_for_fresh_advertisement()
-                    self._set_connection_state("polling")
-                    self._first_notification_logged = False
-                    _LOGGER.info(
-                        "Attempting GATT connection to %s", self.mac_normalized
-                    )
-                    client = await establish_connection(
-                        BleakClientWithServiceCache,
-                        ble_device,
-                        f"{DOMAIN}-{self.mac_normalized}",
-                    )
-                    _LOGGER.info(
-                        "GATT connection established to %s", self.mac_normalized
-                    )
-                    self._client = client
-                    summary_task = self._start_data_rate_summary()
-                    await client.start_notify(
-                        CHARACTERISTIC_UUID, self._notification_callback
-                    )
-                    _LOGGER.info(
-                        "Subscribed to notifications on %s", self.mac_normalized
-                    )
-                    try:
-                        # Wait for an actual DECODED reading — not the
-                        # first raw notification fragment.
-                        await asyncio.wait_for(
-                            decoded_event.wait(),
-                            timeout=POLLED_NOTIFICATION_TIMEOUT_SECONDS,
-                        )
-                    except asyncio.TimeoutError as exc:
-                        # No complete frame assembled within the window.
-                        # Counts as a failure for backoff/repair
-                        # tracking, but we still loop on schedule.
-                        self._on_connect_failure(exc)
-                        backoff = min(
-                            backoff * 2, RECONNECT_MAX_BACKOFF_SECONDS
-                        )
-                    else:
-                        self._on_connect_success()
-                        backoff = RECONNECT_INITIAL_BACKOFF_SECONDS
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:  # noqa: BLE001
-                    self._on_connect_failure(exc)
-                    backoff = min(backoff * 2, RECONNECT_MAX_BACKOFF_SECONDS)
-                finally:
-                    self._decoded_reading_event = None
-                    await self._cancel_data_rate_summary(summary_task)
-                    if client is not None:
-                        with contextlib.suppress(Exception):
-                            await client.disconnect()
-                        _LOGGER.info(
-                            "Disconnected from %s", self.mac_normalized
-                        )
-                    self._client = None
-                    if self._connection_state != "failed_after_setup":
-                        self._set_connection_state("disconnected")
-
-                # Sleep until next cycle. On failure, prefer the longer
-                # of (backoff, poll_interval) so we don't hammer.
-                sleep_for = (
-                    max(backoff, self._poll_interval_seconds)
-                    if self._consecutive_connect_failures > 0
-                    else self._poll_interval_seconds
-                )
-                await asyncio.sleep(sleep_for)
-        except asyncio.CancelledError:
-            return
 
     # ------------------------------------------------------------------
     # BLE device resolution
@@ -1040,13 +948,13 @@ class AtorchBleCoordinator(
             )
 
         if readings:
-            # Push fresh snapshot. The overridden
-            # ``async_set_updated_data`` updates ``self.data``, fans the
-            # snapshot through the base processor pipeline, AND notifies
-            # the CoordinatorEntity listener registry so sensor entities
+            # Push fresh snapshot. Assign ``self.data`` directly (the
+            # base ``ActiveBluetoothDataUpdateCoordinator`` exposes it)
+            # and notify the native listener registry so sensor entities
             # call ``async_write_ha_state`` and the HA UI reflects the
             # new value.
-            self.async_set_updated_data(self._snapshot())
+            self.data = self._snapshot()
+            self.async_update_listeners()
             # Wake the polled runner: a complete frame was decoded and
             # published, so it is now safe to disconnect. The event is
             # only armed during a polled cycle; persistent mode leaves

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
 from atorch_ble import UsbMeterReading
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -201,9 +202,10 @@ async def test_entity_state_propagation_through_ha_pipeline(
     """A coordinator update propagates to HA state via the listener pipeline.
 
     This is the real-HA test that the previous value_fn-direct workaround
-    was hiding: ``CoordinatorEntity.async_added_to_hass`` subscribes via
-    ``coordinator.async_add_listener``, the coordinator's
-    ``async_set_updated_data`` notifies subscribers, and each entity's
+    was hiding: ``PassiveBluetoothCoordinatorEntity.async_added_to_hass``
+    subscribes via the base class's native ``coordinator.async_add_listener``,
+    the coordinator assigns ``self.data`` and calls
+    ``async_update_listeners()``, and each entity's
     ``async_write_ha_state`` lands the new value in ``hass.states``.
 
     Covers the freshness-window availability rule, the value_fn branch,
@@ -236,7 +238,8 @@ async def test_entity_state_propagation_through_ha_pipeline(
     coordinator._last_reading = reading
     coordinator._last_seen = datetime.now(timezone.utc)
     snapshot = AtorchBleData(reading=reading, power_w=5.0)
-    coordinator.async_set_updated_data(snapshot)
+    coordinator.data = snapshot
+    coordinator.async_update_listeners()
     await hass.async_block_till_done()
 
     voltage_state = hass.states.get("sensor.atorch_j7_c_eeff_voltage")
@@ -248,7 +251,8 @@ async def test_entity_state_propagation_through_ha_pipeline(
     # the snapshot drives a fresh write_ha_state cycle through the
     # listener pipeline, and the availability flips to unavailable.
     coordinator._last_seen = datetime.now(timezone.utc) - timedelta(hours=1)
-    coordinator.async_set_updated_data(snapshot)
+    coordinator.data = snapshot
+    coordinator.async_update_listeners()
     await hass.async_block_till_done()
     voltage_state = hass.states.get("sensor.atorch_j7_c_eeff_voltage")
     assert voltage_state.state == "unavailable"
@@ -284,12 +288,14 @@ async def test_native_value_branches(hass: HomeAssistant) -> None:
     assert conn_state_sensor.native_value == coordinator.connection_state
 
 
-async def test_listener_removal_is_idempotent(hass: HomeAssistant) -> None:
-    """The unsubscribe callback returned by async_add_listener is idempotent.
+async def test_listener_removal_stops_updates(hass: HomeAssistant) -> None:
+    """The unsubscribe callback from async_add_listener stops further updates.
 
-    Mirrors ``DataUpdateCoordinator``'s contract: calling the remover
-    twice is harmless. Guards the shim against a stale unsubscribe
-    handle that fires after the entity has already been removed.
+    The native ``PassiveBluetoothDataUpdateCoordinator.async_add_listener``
+    keys its registry by the remover callable and does a plain
+    ``dict.pop`` on removal — a removed listener receives no further
+    updates, and a second remove raises ``KeyError`` (documented base-
+    class behavior; the entity lifecycle only ever removes once).
     """
     entry = await _setup(hass)
     coordinator = hass.data[DOMAIN][entry.entry_id]
@@ -300,13 +306,15 @@ async def test_listener_removal_is_idempotent(hass: HomeAssistant) -> None:
         calls.append(None)
 
     remove = coordinator.async_add_listener(_on_update)
-    coordinator._async_notify_listeners()
+    coordinator.async_update_listeners()
     assert len(calls) == 1
     remove()
-    coordinator._async_notify_listeners()
+    coordinator.async_update_listeners()
     assert len(calls) == 1  # no further calls after removal
-    # Second remove is a no-op, not an error.
-    remove()
+    # The native registry raises KeyError on a double-remove; the entity
+    # lifecycle only ever invokes the remover once, so this is fine.
+    with pytest.raises(KeyError):
+        remove()
 
 
 async def test_connection_state_enum_options(hass: HomeAssistant) -> None:

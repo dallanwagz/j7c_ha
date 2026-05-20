@@ -7,10 +7,14 @@ rules:
     status: done
     comment: |
       Atorch measurements arrive via GATT notifications, not advertisements.
-      ActiveBluetoothProcessorCoordinator is used as the base coordinator
-      class; the runner task manages the actual GATT connection and cadence.
-      Cadence is governed by the device notification rate (~1 Hz in persistent
-      mode) or the user-selected poll interval (batch-2/04).
+      ActiveBluetoothDataUpdateCoordinator is used as the base coordinator
+      class. In persistent mode a streaming runner holds a continuous GATT
+      connection and pushes decoded frames (~1 Hz) into the coordinator. In
+      polled mode the framework's advertisement-gated poll debouncer drives
+      poll_method: it fires on the next BLE advertisement once needs_poll
+      reports the interval has elapsed, so the effective cadence is
+      approximately every poll_interval_seconds, gated on advertisement
+      reception (user-selected interval, batch-2/04).
   brands:
     status: todo
     target: 0.2.0

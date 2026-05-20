@@ -36,6 +36,11 @@ MODE_PERSISTENT = "persistent"
 MODE_POLLED = "polled"
 
 DEFAULT_CONNECTION_MODE = MODE_PERSISTENT
+# Polled-mode target cadence. The framework poll debouncer fires
+# poll_method on the next BLE advertisement once this many seconds have
+# elapsed since the last poll, so the effective cadence is "≈ every N
+# seconds, gated on advertisement reception" — a meter advertising
+# infrequently while idle may poll slower than this nominal value.
 DEFAULT_POLL_INTERVAL_SECONDS = 60
 MIN_POLL_INTERVAL_SECONDS = 10
 MAX_POLL_INTERVAL_SECONDS = 3600
@@ -65,14 +70,17 @@ RECONNECT_MAX_BACKOFF_SECONDS = 30.0
 # advertisement cycle on slow-advertising firmware variants.
 ADVERTISEMENT_WAIT_TIMEOUT_SECONDS = 900  # 15 minutes
 
-# Polled-cycle wait timeout for a fully DECODED reading. A raw BLE
+# Per-poll wait timeout for a fully DECODED reading. A raw BLE
 # notification is often just a fragment of the 36-byte Atorch frame;
 # the parser reassembles a complete frame from several notifications.
 # Production logs show a complete frame can take 15+ seconds to
-# assemble on this hardware, so the polled runner must wait that long
-# for an actual decoded UsbMeterReading before giving up — waiting on
-# the first raw notification (the v0.1.5 behaviour) disconnected the
-# meter mid-frame and decoded zero readings.
+# assemble on this hardware, so poll_method must wait that long for an
+# actual decoded UsbMeterReading before giving up — waiting on the
+# first raw notification (the v0.1.5 behaviour) disconnected the meter
+# mid-frame and decoded zero readings. This bounds a single poll cycle;
+# the cadence between cycles is advertisement-gated (≈ every
+# DEFAULT_POLL_INTERVAL_SECONDS, on the next advertisement after the
+# interval elapses).
 POLLED_NOTIFICATION_TIMEOUT_SECONDS = 25.0
 
 # Interval for the data-rate INFO summary logged while a connection is
