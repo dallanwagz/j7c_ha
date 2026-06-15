@@ -83,6 +83,16 @@ ADVERTISEMENT_WAIT_TIMEOUT_SECONDS = 900  # 15 minutes
 # interval elapses).
 POLLED_NOTIFICATION_TIMEOUT_SECONDS = 25.0
 
+# Persistent-mode data-flow watchdog. The runner's heartbeat only knows
+# the GATT link is up (``client.is_connected``); it cannot tell that the
+# meter has silently stopped streaming (notify subscription dropped, or
+# the firmware wedged) while the ACL stays nominally connected. If no raw
+# notification arrives for this long while "connected", the runner forces
+# a reconnect rather than reporting a healthy-but-stale connection
+# forever. Generously larger than the worst-case ~15 s frame-assembly
+# time so a slow-but-alive meter is never torn down.
+PERSISTENT_DATA_TIMEOUT_SECONDS = 60.0
+
 # Repair-issue thresholds.
 CONNECT_FAILURE_RAISE_THRESHOLD = 5
 CONNECT_FAILURE_RERAISE_INTERVAL = 50
