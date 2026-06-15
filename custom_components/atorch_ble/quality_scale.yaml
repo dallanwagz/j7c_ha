@@ -17,10 +17,14 @@ rules:
       reception (user-selected interval, batch-2/04).
   brands:
     status: todo
-    target: 0.2.0
+    target: 0.3.0
     comment: |
-      Brand assets land at HA Core readiness pass (batch-4/05). Not blocking
-      for HACS custom-component distribution.
+      Brand assets (icon + logo) are submitted to the home-assistant/brands
+      repo, not this one, so this rule can only be satisfied alongside the
+      HA Core upstream submission — which is deferred as a post-v1 maintainer
+      decision (see UPSTREAM.md). Re-targeted from 0.2.0 to the 0.3.0
+      Core-readiness milestone. Not blocking for HACS custom-component
+      distribution.
   common-modules: done
   config-flow-test-coverage:
     status: done
@@ -258,8 +262,11 @@ rules:
     status: exempt
     comment: Integration performs no HTTP I/O; transport is BLE only.
   strict-typing:
-    status: todo
-    target: 0.2.0
+    status: done
     comment: |
-      Requires mypy strict config in pyproject.toml and a `py.typed` marker
-      on custom_components/atorch_ble. Tracked for v0.2.0.
+      `[tool.mypy]` strict config in pyproject.toml type-checks
+      custom_components/atorch_ble under `mypy --strict` (Python 3.14 target,
+      explicit package bases so the integration resolves as
+      custom_components.atorch_ble and does not shadow the installed
+      atorch-ble library). A `py.typed` marker ships in the package. mypy
+      runs green in CI (validate.yml).

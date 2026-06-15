@@ -124,7 +124,7 @@ def _project_last_reading(reading: Any) -> dict[str, Any] | None:
     """
     if reading is None:
         return None
-    if dataclasses.is_dataclass(reading):
+    if dataclasses.is_dataclass(reading) and not isinstance(reading, type):
         return dataclasses.asdict(reading)
     return {
         name: getattr(reading, name)

@@ -41,6 +41,23 @@ Issues = "https://github.com/dallanwagz/j7c_ha/issues"
 [tool.setuptools.packages.find]
 include = ["custom_components*"]
 
+[tool.mypy]
+# strict-typing quality-scale rule. Scoped to the integration package; tests
+# are exercised by pytest, not type-checked. Mirrors HA Core's strict profile.
+# Targets 3.14 because HA 2026.5.2 uses 3.14-only syntax (the runtime HA
+# actually installs on); pyproject's requires-python floor stays >=3.12.
+python_version = "3.14"
+strict = true
+files = ["custom_components/atorch_ble"]
+# `custom_components` has no __init__.py, so without explicit package bases
+# mypy would name the integration package `atorch_ble` and shadow the
+# installed `atorch-ble` library (breaking `from atorch_ble import ...`).
+# Anchoring the base at the repo root makes the module `custom_components.
+# atorch_ble` — exactly how Home Assistant loads it at runtime.
+mypy_path = "."
+explicit_package_bases = true
+namespace_packages = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

@@ -81,8 +81,9 @@ from atorch_ble import (
     UnsupportedPacketType,
     UsbMeterReading,
 )
-from bleak import BleakClient, BleakError
+from bleak import BleakClient
 from bleak.backends.device import BLEDevice
+from bleak.exc import BleakError
 from bleak_retry_connector import (
     BleakClientWithServiceCache,
     establish_connection,
@@ -286,8 +287,11 @@ class AtorchBleCoordinator(
         """Return the most recently decoded reading, or ``None``."""
         return self._last_reading
 
+    # Intentional semantic override: the base coordinator exposes ``last_seen``
+    # as a monotonic ``float``; this integration surfaces a wall-clock UTC
+    # datetime of the last decoded frame (or ``None`` before the first frame).
     @property
-    def last_seen(self) -> datetime | None:
+    def last_seen(self) -> datetime | None:  # type: ignore[override]
         """Return the UTC datetime of the most recent successful frame."""
         return self._last_seen
 
@@ -306,7 +310,7 @@ class AtorchBleCoordinator(
     @property
     def parser_error_count(self) -> int:
         """Re-export the parser's swallowed-InvalidPacket count under the canonical name."""
-        return self._parser.error_count
+        return int(self._parser.error_count)
 
     @property
     def parser_error_rate_5m(self) -> float:
@@ -350,7 +354,10 @@ class AtorchBleCoordinator(
     # Lifecycle
     # ------------------------------------------------------------------
 
-    async def async_start(self) -> Callable[[], None]:
+    # Intentional override: the base ``async_start`` is synchronous; this
+    # integration awaits BLE runner startup, so it is declared ``async`` and
+    # returns the base stop callable once startup completes.
+    async def async_start(self) -> Callable[[], None]:  # type: ignore[override]
         """Start the base coordinator and the BLE runner.
 
         Returns the base coordinator's stop callable so callers can
