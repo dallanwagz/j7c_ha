@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: HACS Action
         uses: hacs/action@main
         with:
@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Hassfest
         uses: home-assistant/actions/hassfest@master
 
@@ -41,10 +41,10 @@ jobs:
         python-version: ["3.14"]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -56,6 +56,12 @@ jobs:
           # on PEP 660's synthetic `__editable__.<dist>.finder.__path_hook__`
           # path entry under Python 3.14.
           pip install -e ".[dev]" --config-settings editable_mode=compat
+
+      - name: Type-check (mypy strict, strict-typing quality-scale rule)
+        run: mypy
+
+      - name: Quality-scale checklist guard
+        run: python scripts/check_quality_scale_todos.py
 
       - name: Run pytest with coverage
         run: |

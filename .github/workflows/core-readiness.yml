@@ -24,7 +24,7 @@ jobs:
     continue-on-error: true
     steps:
       - name: Checkout this repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: integration
 
@@ -51,7 +51,7 @@ jobs:
           cat core/homeassistant/components/atorch_ble/manifest.json
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
