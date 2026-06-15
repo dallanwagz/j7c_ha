@@ -124,6 +124,7 @@ from .const import (
     ISSUE_UNSUPPORTED_PACKET_TYPE_PREFIX,
     MODE_PERSISTENT,
     PACKET_TYPE_TO_MODEL,
+    PERSISTENT_DATA_TIMEOUT_SECONDS,
     POLLED_NOTIFICATION_TIMEOUT_SECONDS,
     RECONNECT_INITIAL_BACKOFF_SECONDS,
     RECONNECT_MAX_BACKOFF_SECONDS,
@@ -240,6 +241,12 @@ class AtorchBleCoordinator(
         # "data flowing" INFO line emits exactly once per connection
         # attempt that successfully receives a frame.
         self._first_notification_logged: bool = False
+
+        # Monotonic timestamp of the most recent raw notification. Seeded
+        # at connect time and refreshed on every notification; the
+        # persistent runner's heartbeat uses it as a data-flow watchdog
+        # (force a reconnect if the link stays up but frames stop).
+        self._last_notification_monotonic: float | None = None
 
         # Set by _notification_callback AFTER a reading is decoded and
         # published. The polled runner waits on this so it does not
@@ -622,6 +629,23 @@ class AtorchBleCoordinator(
     # Persistent-mode runner
     # ------------------------------------------------------------------
 
+    def _data_is_stale(self, now_monotonic: float) -> bool:
+        """Whether a nominally-connected link has gone silent too long.
+
+        Returns ``True`` when a notification timestamp has been recorded
+        (the connect path seeds one) and the gap since the last raw
+        notification exceeds :data:`PERSISTENT_DATA_TIMEOUT_SECONDS`. The
+        persistent heartbeat polls this so a link that stays
+        ``is_connected`` while the meter has silently stopped streaming
+        is torn down and reconnected instead of reported healthy forever.
+        Returns ``False`` when no timestamp exists yet (defensive
+        pre-connect case).
+        """
+        last = self._last_notification_monotonic
+        if last is None:
+            return False
+        return (now_monotonic - last) > PERSISTENT_DATA_TIMEOUT_SECONDS
+
     async def _run_persistent(self) -> None:  # pragma: no cover - requires real bleak loop; covered by smoke test
         """Hold one long-lived connection; reconnect with capped backoff."""
         backoff = RECONNECT_INITIAL_BACKOFF_SECONDS
@@ -648,10 +672,21 @@ class AtorchBleCoordinator(
                 # a 1s heartbeat is plenty responsive for a meter that
                 # ticks at ~1Hz. The heartbeat uses the client returned by
                 # the connect helper, not a re-read of self._client, so an
-                # overlapping poll cannot swap the handle mid-loop.
+                # overlapping poll cannot swap the handle mid-loop. The
+                # data-flow watchdog also breaks out when the link is up
+                # but notifications have silently stopped, forcing a fresh
+                # reconnect instead of holding a healthy-but-stale link.
                 try:
                     while client.is_connected:
                         await asyncio.sleep(1.0)
+                        if self._data_is_stale(time.monotonic()):
+                            _LOGGER.warning(
+                                "No data from %s for >%.0fs while GATT-connected; "
+                                "forcing reconnect",
+                                self.mac_normalized,
+                                PERSISTENT_DATA_TIMEOUT_SECONDS,
+                            )
+                            break
                 finally:
                     with contextlib.suppress(Exception):
                         await client.disconnect()
@@ -691,6 +726,10 @@ class AtorchBleCoordinator(
         # transition so a notification arriving during the listener
         # storm of the state change still logs the first-frame line.
         self._first_notification_logged = False
+        # Seed the data-flow watchdog so its grace period starts now,
+        # giving the meter until PERSISTENT_DATA_TIMEOUT_SECONDS to emit
+        # its first frame before the heartbeat treats the link as stale.
+        self._last_notification_monotonic = time.monotonic()
         self._set_connection_state("connected")
         return client
 
@@ -858,6 +897,7 @@ class AtorchBleCoordinator(
     ) -> None:
         """bleak notification callback — sync; schedules async work on hass."""
         now = time.monotonic()
+        self._last_notification_monotonic = now
         self._increment_bucket(now, notifs=1, errors=0)
         # Once-per-session "data flowing" INFO log. Throttled by a flag
         # the runner clears at the start of each connection attempt; the

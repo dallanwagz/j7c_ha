@@ -31,6 +31,7 @@ from custom_components.atorch_ble.const import (
     ISSUE_CANNOT_CONNECT,
     MODE_PERSISTENT,
     MODE_POLLED,
+    PERSISTENT_DATA_TIMEOUT_SECONDS,
 )
 from custom_components.atorch_ble.coordinator import AtorchBleCoordinator
 
@@ -219,6 +220,67 @@ async def test_parser_error_rate_5m_excludes_old_buckets(
         return_value=400.0,
     ):
         assert coordinator.parser_error_rate_5m == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Persistent-mode data-flow watchdog (_data_is_stale)
+# ---------------------------------------------------------------------------
+
+
+async def test_data_is_stale_false_before_any_notification(
+    hass: HomeAssistant,
+) -> None:
+    """With no notification timestamp seeded yet, the link is never stale.
+
+    Guards the defensive pre-connect path: the connect helper seeds the
+    timestamp, but if the heartbeat ever ran first it must not tear down.
+    """
+    _, coordinator = await _setup(hass)
+    assert coordinator._last_notification_monotonic is None
+    assert coordinator._data_is_stale(10_000.0) is False
+
+
+async def test_data_is_stale_false_within_timeout(
+    hass: HomeAssistant,
+) -> None:
+    """A recent notification keeps the link fresh."""
+    _, coordinator = await _setup(hass)
+    coordinator._last_notification_monotonic = 100.0
+    # Just under the timeout -> still fresh.
+    assert (
+        coordinator._data_is_stale(100.0 + PERSISTENT_DATA_TIMEOUT_SECONDS - 0.1)
+        is False
+    )
+
+
+async def test_data_is_stale_true_past_timeout(
+    hass: HomeAssistant,
+) -> None:
+    """No notification for longer than the timeout marks the link stale."""
+    _, coordinator = await _setup(hass)
+    coordinator._last_notification_monotonic = 100.0
+    assert (
+        coordinator._data_is_stale(100.0 + PERSISTENT_DATA_TIMEOUT_SECONDS + 0.1)
+        is True
+    )
+
+
+async def test_notification_callback_refreshes_watchdog_timestamp(
+    hass: HomeAssistant,
+) -> None:
+    """Each raw notification refreshes the watchdog clock.
+
+    Asserts the wiring (callback -> timestamp) without the bleak path:
+    feed a valid frame through the public notification callback and check
+    the monotonic stamp advances to the patched 'now'.
+    """
+    _, coordinator = await _setup(hass)
+    with patch(
+        "custom_components.atorch_ble.coordinator.time.monotonic",
+        return_value=4242.0,
+    ):
+        coordinator._notification_callback(None, b"\x00")  # non-frame is fine
+    assert coordinator._last_notification_monotonic == 4242.0
 
 
 # ---------------------------------------------------------------------------

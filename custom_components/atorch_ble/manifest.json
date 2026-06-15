@@ -15,6 +15,6 @@
   "integration_type": "device",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/dallanwagz/j7c_ha/issues",
-  "requirements": ["atorch-ble==0.1.1"],
-  "version": "0.2.1"
+  "requirements": ["atorch-ble==0.1.2"],
+  "version": "0.2.2"
 }
