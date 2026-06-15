@@ -10,6 +10,26 @@ Releases are cut by pushing a `vMAJOR.MINOR.PATCH` tag; the
 `custom_components/atorch_ble/` into `atorch_ble.zip` and attaches it
 to the GitHub Release.
 
+## [0.2.2] - 2026-06-15
+
+### Changed
+- Bumped the `atorch-ble` pin (`0.1.1` → `0.1.2`) in `pyproject.toml` and
+  `manifest.json`. `atorch-ble` 0.1.2 fixes USB-meter duration decoding:
+  bytes `0x17`-`0x18` are a 16-bit big-endian hours counter, not a days
+  byte plus an hours byte (see that project's CHANGELOG). Before this
+  bump the `runtime` sensor under-reported for any meter running ≥ 256 h
+  continuous. Confirmed against the official Atorch "E_Test" app.
+
+### Added
+- Persistent-mode data-flow watchdog. The runner's heartbeat previously
+  only checked `client.is_connected`, so a link that stayed up while the
+  meter silently stopped streaming (notify subscription dropped or
+  firmware wedged) would report `connected` with stale readings forever.
+  The heartbeat now also forces a reconnect when no raw notification has
+  arrived for `PERSISTENT_DATA_TIMEOUT_SECONDS` (60 s, comfortably above
+  the worst-case ~15 s frame-assembly time). Decision logic lives in the
+  unit-tested `_data_is_stale` helper.
+
 ## [0.2.1] - 2026-06-14
 
 ### Changed
