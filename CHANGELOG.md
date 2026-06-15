@@ -10,6 +10,14 @@ Releases are cut by pushing a `vMAJOR.MINOR.PATCH` tag; the
 `custom_components/atorch_ble/` into `atorch_ble.zip` and attaches it
 to the GitHub Release.
 
+## [0.2.1] - 2026-06-14
+
+### Changed
+- Aligned the `atorch-ble` pin in `pyproject.toml` (`0.1.0` → `0.1.1`) with the version already required by `custom_components/atorch_ble/manifest.json`, which is the requirement Home Assistant actually installs. No runtime behavior change for installed integrations — the component already ran against `atorch-ble==0.1.1`; this only fixes the stale development/packaging pin so a fresh `pip install -e .` resolves the same version HA uses.
+
+### Fixed
+- Removed an unused `contextlib` import in `tests/test_coordinator.py` flagged by `ruff`.
+
 ## [0.2.0] - 2026-05-20
 
 ### Changed
