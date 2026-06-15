@@ -24,7 +24,7 @@ connection; in polled mode there is no runner — the framework
 debouncer calls :meth:`_poll_method` directly. Mode and interval
 changes from the options flow drain any active runner and re-arm via
 the options-update listener — no HA restart required, and HA-side
-``last_reading``/``last_seen`` survive the transition.
+``last_reading``/``last_frame_at`` survive the transition.
 
 Repair issues, device-registry ``model`` sync, and config-entry title
 rewriting for unsupported packet types are all driven from the
@@ -168,7 +168,7 @@ class AtorchBleCoordinator(
 
     * ``mac_normalized`` — canonical MAC ``format_mac()`` string.
     * ``last_reading`` — most recent :class:`UsbMeterReading` or ``None``.
-    * ``last_seen`` — UTC datetime of most recent successful frame.
+    * ``last_frame_at`` — UTC datetime of most recent successful frame.
     * ``connection_state`` — one of the closed-set strings above.
     * ``parser_error_count`` — canonical re-export of the parser
       library's ``error_count``.
@@ -216,7 +216,7 @@ class AtorchBleCoordinator(
 
         # Latest snapshot fields.
         self._last_reading: UsbMeterReading | None = None
-        self._last_seen: datetime | None = None
+        self._last_frame_at: datetime | None = None
 
         # Failure tracking + log-once discipline.
         self._consecutive_connect_failures: int = 0
@@ -261,7 +261,7 @@ class AtorchBleCoordinator(
         # redundant registry writes.
         self._last_model_written: str | None = None
 
-        # Whether async_start has been called and the underlying base
+        # Whether async_start_runner has been called and the underlying base
         # coordinator is live; used to gate option-update transitions.
         self._started: bool = False
 
@@ -294,13 +294,16 @@ class AtorchBleCoordinator(
         """Return the most recently decoded reading, or ``None``."""
         return self._last_reading
 
-    # Intentional semantic override: the base coordinator exposes ``last_seen``
-    # as a monotonic ``float``; this integration surfaces a wall-clock UTC
-    # datetime of the last decoded frame (or ``None`` before the first frame).
     @property
-    def last_seen(self) -> datetime | None:  # type: ignore[override]
-        """Return the UTC datetime of the most recent successful frame."""
-        return self._last_seen
+    def last_frame_at(self) -> datetime | None:
+        """Return the UTC datetime of the most recent successful frame.
+
+        Distinct from the base coordinator's advertisement-based
+        ``last_seen`` (a ``float`` epoch time): this is wall-clock UTC of
+        the last *decoded* meter frame, which drives measurement-freshness
+        availability. ``None`` before the first frame.
+        """
+        return self._last_frame_at
 
     @property
     def expected_cadence_seconds(self) -> int:
@@ -361,18 +364,16 @@ class AtorchBleCoordinator(
     # Lifecycle
     # ------------------------------------------------------------------
 
-    # Intentional override: the base ``async_start`` is synchronous; this
-    # integration awaits BLE runner startup, so it is declared ``async`` and
-    # returns the base stop callable once startup completes.
-    async def async_start(self) -> Callable[[], None]:  # type: ignore[override]
+    async def async_start_runner(self) -> Callable[[], None]:
         """Start the base coordinator and the BLE runner.
 
-        Returns the base coordinator's stop callable so callers can
-        compose teardown if they wish; ``async_unload`` is the supported
-        path though.
+        Named distinctly from the base coordinator's synchronous
+        ``async_start`` (which this calls): the integration additionally
+        spins up the BLE streaming runner, so this is ``async``. Returns
+        the base coordinator's stop callable so callers can compose
+        teardown if they wish; ``async_unload`` is the supported path
+        though.
         """
-        # async_start() on the base class is sync-returning in current
-        # HA Core; we await defensively in case that ever changes.
         unload_base = super().async_start()
         self._started = True
         self._start_runner()
@@ -934,7 +935,7 @@ class AtorchBleCoordinator(
                 reading.current_a,
             )
             self._last_reading = reading
-            self._last_seen = datetime.now(timezone.utc)
+            self._last_frame_at = datetime.now(timezone.utc)
             # Idempotent device-registry model sync for the success case.
             self.hass.async_create_task(
                 self._handle_decoded_frame(_SUCCESS_PACKET_TYPE)

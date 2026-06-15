@@ -270,7 +270,7 @@ class AtorchBleSensor(
         the user can see *why* measurement sensors are unavailable.
 
         All other (``value_fn``-backed) measurement entities are
-        available iff ``coordinator.last_seen`` is within a freshness
+        available iff ``coordinator.last_frame_at`` is within a freshness
         window of ``2 * coordinator.expected_cadence_seconds``. The rule
         is freshness-alone — ``coordinator.connection_state`` is
         intentionally NOT consulted because polled-mode sensors spend
@@ -283,14 +283,14 @@ class AtorchBleSensor(
         # not measurement-freshness driven).
         if self.entity_description.value_fn_coordinator is not None:
             return True
-        last_seen = self.coordinator.last_seen
-        if last_seen is None:
+        last_frame_at = self.coordinator.last_frame_at
+        if last_frame_at is None:
             available = False
         else:
             window = timedelta(
                 seconds=2 * self.coordinator.expected_cadence_seconds
             )
-            available = (utcnow() - last_seen) <= window
+            available = (utcnow() - last_frame_at) <= window
         # Emit one DEBUG line per True -> False transition; never log
         # the reverse direction to keep logs quiet on healthy reconnects.
         if self._available_prev and not available:

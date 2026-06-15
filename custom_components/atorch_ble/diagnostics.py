@@ -194,11 +194,13 @@ async def async_get_config_entry_diagnostics(
     # Coordinator state block — defensive ``getattr`` keeps diagnostics
     # useful even if coordinator setup is mid-flight or partial.
     if coordinator is not None:
-        last_seen = getattr(coordinator, "last_seen", None)
+        last_frame_at = getattr(coordinator, "last_frame_at", None)
         coordinator_state: dict[str, Any] = {
             "mode": getattr(coordinator, "_connection_mode", None),
             "connection_state": getattr(coordinator, "connection_state", None),
-            "last_seen": last_seen.isoformat() if last_seen is not None else None,
+            "last_seen": (
+                last_frame_at.isoformat() if last_frame_at is not None else None
+            ),
             "consecutive_connect_failures": getattr(
                 coordinator, "_consecutive_connect_failures", None
             ),

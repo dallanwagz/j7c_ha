@@ -10,6 +10,23 @@ Releases are cut by pushing a `vMAJOR.MINOR.PATCH` tag; the
 `custom_components/atorch_ble/` into `atorch_ble.zip` and attaches it
 to the GitHub Release.
 
+## [Unreleased]
+
+### Changed
+- Eliminated both `# type: ignore[override]` suppressions structurally for
+  HA-Core-grade strict mypy: renamed `coordinator.last_seen` →
+  `last_frame_at` (un-shadows the base `BasePassiveBluetoothCoordinator.last_seen`
+  `float`; the diagnostics JSON key stays `"last_seen"`) and
+  `coordinator.async_start` → `async_start_runner` (avoids the Liskov
+  override of the base's sync `async_start`). No user-facing behavior change.
+- Reconciled `UPSTREAM.md` against current source and synced its
+  `atorch-ble` references to `0.1.2`.
+
+### Fixed
+- Pinned `dbus-fast>=5.0.16` in the `dev` extra so the macOS test suite
+  runs (works around `pytest-homeassistant-custom-component` forcing the
+  Linux BT adapter path).
+
 ## [0.2.2] - 2026-06-15
 
 ### Changed
