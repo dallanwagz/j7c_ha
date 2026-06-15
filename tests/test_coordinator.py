@@ -29,11 +29,15 @@ from custom_components.atorch_ble.const import (
     CONF_POLL_INTERVAL_SECONDS,
     DOMAIN,
     ISSUE_CANNOT_CONNECT,
+    ISSUE_CANNOT_CONNECT_NO_SLOT,
     MODE_PERSISTENT,
     MODE_POLLED,
     PERSISTENT_DATA_TIMEOUT_SECONDS,
 )
-from custom_components.atorch_ble.coordinator import AtorchBleCoordinator
+from custom_components.atorch_ble.coordinator import (
+    AtorchBleCoordinator,
+    _is_no_slot_error,
+)
 
 from .conftest import TEST_MAC_NORMALIZED, TEST_TITLE
 
@@ -435,6 +439,43 @@ async def test_cannot_connect_after_setup_raises_at_5_failures(
     await hass.async_block_till_done()
     issue = ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_CANNOT_CONNECT)
     assert issue is not None
+    assert "device_name" in issue.translation_placeholders
+    # Generic failure -> generic translation key.
+    assert issue.translation_key == ISSUE_CANNOT_CONNECT
+
+
+def test_is_no_slot_error_detects_slot_exhaustion() -> None:
+    """The slot-exhaustion signature is matched; unrelated errors are not."""
+    no_slot = BleakError(
+        "atorch_ble-c2:67:69:9f:77:f4 - C2:67:69:9F:77:F4: Failed to connect "
+        "after 9 attempt(s): No backend with an available connection slot "
+        "that can reach address C2:67:69:9F:77:F4 was found"
+    )
+    assert _is_no_slot_error(no_slot) is True
+    assert _is_no_slot_error(BleakError("ESP_GATT_CONN_TIMEOUT")) is False
+    assert _is_no_slot_error(TimeoutError()) is False
+
+
+async def test_cannot_connect_no_slot_uses_actionable_message(
+    hass: HomeAssistant,
+) -> None:
+    """A slot-exhaustion failure raises the issue with the no-slot message.
+
+    Same issue id as the generic case (so clear/re-raise are unchanged),
+    but the more actionable ``cannot_connect_no_slot`` translation key.
+    """
+    _, coordinator = await _setup(hass)
+    no_slot = BleakError(
+        "No backend with an available connection slot that can reach "
+        "address C2:67:69:9F:77:F4 was found"
+    )
+    for _ in range(5):
+        _drive_failure(coordinator, no_slot)
+    await hass.async_block_till_done()
+
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_CANNOT_CONNECT)
+    assert issue is not None
+    assert issue.translation_key == ISSUE_CANNOT_CONNECT_NO_SLOT
     assert "device_name" in issue.translation_placeholders
 
 

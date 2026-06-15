@@ -121,6 +121,7 @@ from .const import (
     DEFAULT_POLL_INTERVAL_SECONDS,
     DOMAIN,
     ISSUE_CANNOT_CONNECT,
+    ISSUE_CANNOT_CONNECT_NO_SLOT,
     ISSUE_UNSUPPORTED_PACKET_TYPE_PREFIX,
     MODE_PERSISTENT,
     PACKET_TYPE_TO_MODEL,
@@ -143,6 +144,24 @@ _WINDOW_SECONDS = _BUCKET_SECONDS * _BUCKET_COUNT  # 300
 # expansion by accepting an explicit override if the parser ever exposes
 # a per-reading type byte.
 _SUCCESS_PACKET_TYPE = 0x03
+
+# Substring of the habluetooth/bleak-retry-connector error raised when no
+# Bluetooth backend that can reach the meter has a free connection slot,
+# e.g. "No backend with an available connection slot that can reach address
+# C2:.. was found". This is the signature of an ESPHome proxy (or local
+# adapter) still holding a stale connection to the meter — typically across
+# an HA restart — so it cannot self-heal until the stale link is dropped.
+_NO_SLOT_ERROR_SIGNATURE = "available connection slot"
+
+
+def _is_no_slot_error(exc: BaseException) -> bool:
+    """Whether a connect failure is BLE connection-slot exhaustion.
+
+    Matched on the error text rather than an exception type because the
+    message originates in habluetooth/bleak-retry-connector and is surfaced
+    as a generic ``BleakError``; the wording is stable across versions.
+    """
+    return _NO_SLOT_ERROR_SIGNATURE in str(exc).lower()
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -223,6 +242,9 @@ class AtorchBleCoordinator(
         self._failures_since_last_raise: int = 0
         self._cannot_connect_issue_raised: bool = False
         self._warned_about_current_failure_streak: bool = False
+        # Whether the most recent connect failure was connection-slot
+        # exhaustion; selects the more actionable repair-issue message.
+        self._last_failure_no_slot: bool = False
 
         # Rolling-window buckets: list of (bucket_start_monotonic, notifs, errors)
         # newest-last. Pruned lazily on access.
@@ -1005,6 +1027,7 @@ class AtorchBleCoordinator(
         """Increment failure counters and emit log/repair issue per discipline."""
         self._consecutive_connect_failures += 1
         self._failures_since_last_raise += 1
+        self._last_failure_no_slot = _is_no_slot_error(exc)
 
         if not self._warned_about_current_failure_streak:
             _LOGGER.warning(
@@ -1038,22 +1061,30 @@ class AtorchBleCoordinator(
 
     async def _raise_cannot_connect_issue(self) -> None:
         device_name = self._resolve_device_name()
+        # Same issue id either way (so clear/re-raise lifecycle is unchanged),
+        # but pick the slot-exhaustion-specific message when that's the cause.
+        translation_key = (
+            ISSUE_CANNOT_CONNECT_NO_SLOT
+            if self._last_failure_no_slot
+            else ISSUE_CANNOT_CONNECT
+        )
         ir.async_create_issue(
             self.hass,
             DOMAIN,
             ISSUE_CANNOT_CONNECT,
             is_fixable=False,
             severity=IssueSeverity.WARNING,
-            translation_key=ISSUE_CANNOT_CONNECT,
+            translation_key=translation_key,
             translation_placeholders={"device_name": device_name},
         )
         self._cannot_connect_issue_raised = True
         self._failures_since_last_raise = 0
         self._set_connection_state("failed_after_setup")
         _LOGGER.warning(
-            "Raised cannot_connect_after_setup repair (mac=%s, name=%s)",
+            "Raised cannot_connect_after_setup repair (mac=%s, name=%s, reason=%s)",
             self.mac_normalized,
             device_name,
+            "no_connection_slot" if self._last_failure_no_slot else "generic",
         )
 
     async def _reraise_cannot_connect_issue(self) -> None:
