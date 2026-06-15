@@ -10,7 +10,19 @@ Releases are cut by pushing a `vMAJOR.MINOR.PATCH` tag; the
 `custom_components/atorch_ble/` into `atorch_ble.zip` and attaches it
 to the GitHub Release.
 
-## [Unreleased]
+## [0.2.3] - 2026-06-15
+
+### Added
+- More actionable repair issue when a connect failure is specifically
+  Bluetooth connection-slot exhaustion ("No backend with an available
+  connection slot that can reach …"). This is the signature of a BLE proxy
+  or adapter still holding a stale connection to the meter across a Home
+  Assistant or host restart, which does not self-heal. The `cannot_connect`
+  repair now shows a slot-specific message (`cannot_connect_no_slot`) that
+  tells the user to power-cycle the meter or reboot/update the ESPHome
+  proxy, instead of the generic text. Same issue id, so the existing
+  raise/clear/re-raise lifecycle is unchanged; detection is via
+  `_is_no_slot_error`.
 
 ### Changed
 - Eliminated both `# type: ignore[override]` suppressions structurally for

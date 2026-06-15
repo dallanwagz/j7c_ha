@@ -88,6 +88,10 @@
     "cannot_connect_after_setup": {
       "title": "Cannot connect to {device_name}",
       "description": "Home Assistant added your Atorch J7-C ({device_name}) but has not been able to connect to it. Common causes:\n\n- The device is powered off, asleep, or out of Bluetooth range.\n- The Bluetooth adapter or transport has dropped offline.\n- **If you use an ESPHome Bluetooth proxy:** the proxy may be offline, or may have run out of connection slots. Try the Polled connection mode in this integration's options to free a slot.\n\nThe integration will keep retrying. This message clears automatically once the device connects. If you have permanently removed or replaced this meter and no longer want these notifications, delete this integration's device entry from Devices & Services."
+    },
+    "cannot_connect_no_slot": {
+      "title": "No Bluetooth connection slot for {device_name}",
+      "description": "Home Assistant cannot connect to your Atorch J7-C ({device_name}) because every Bluetooth backend that can reach it has no free connection slot. This almost always means a Bluetooth proxy (or adapter) is still holding an earlier connection to the meter, for example after a Home Assistant or host restart, and has not released it. It will not recover on its own. To fix it:\n\n- Power-cycle the meter (cut and restore its power) to force the old connection to drop, or reboot the ESPHome Bluetooth proxy that serves it.\n- Keep your ESPHome proxies on current firmware. Older firmware does not always release BLE connections when Home Assistant restarts.\n- As a workaround, switch this integration to Polled connection mode in its options, which only holds a slot briefly.\n\nThe integration will keep retrying, and this message clears automatically once it connects."
     }
   }
 }

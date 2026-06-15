@@ -102,6 +102,12 @@ ACK_UNSUPPORTED_KEY = "acknowledged_unsupported_packet_types"
 
 # Repair issue IDs / translation keys.
 ISSUE_CANNOT_CONNECT = "cannot_connect_after_setup"
+# Alternate translation_key for the cannot-connect issue when the failure is
+# specifically BLE connection-slot exhaustion (a proxy/adapter that can reach
+# the meter has no free slot — usually a proxy still holding a stale connection
+# across an HA restart). Same issue id as ISSUE_CANNOT_CONNECT so the
+# raise/clear/re-raise lifecycle is unchanged; only the shown text differs.
+ISSUE_CANNOT_CONNECT_NO_SLOT = "cannot_connect_no_slot"
 ISSUE_UNSUPPORTED_PACKET_TYPE_PREFIX = "unsupported_packet_type_0x"
 
 # Closed set of coordinator connection_state values. Source of truth for
