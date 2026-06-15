@@ -900,13 +900,13 @@ async def test_wait_for_fresh_advertisement_log_includes_scanner_details(
 async def test_notification_callback_valid_frame(
     hass: HomeAssistant, build_j7c_frame
 ) -> None:
-    """Feeding a valid J7-C frame updates last_reading and last_seen."""
+    """Feeding a valid J7-C frame updates last_reading and last_frame_at."""
     _, coordinator = await _setup(hass)
     frame = build_j7c_frame(voltage_v=5.0, current_a=1.5)
     coordinator._notification_callback(None, frame)
     await hass.async_block_till_done()
     assert coordinator.last_reading is not None
-    assert coordinator.last_seen is not None
+    assert coordinator.last_frame_at is not None
     assert abs(coordinator.last_reading.voltage_v - 5.0) < 0.01
     assert abs(coordinator.last_reading.current_a - 1.5) < 0.01
 

@@ -32,6 +32,14 @@ dev = [
     "serialx==1.7.3",
     "aiousbwatcher==1.1.2",
     "aioesphomeapi==44.24.1",
+    # dbus-fast is marked `platform_system == "Linux"` by every package that
+    # needs it (bleak, bluetooth-adapters, habluetooth), so pip skips it on
+    # macOS. But pytest-homeassistant-custom-component drives the LinuxAdapters
+    # bluetooth path regardless of host OS, which imports `unpack_variants`
+    # from dbus_fast — without it the whole suite fails (~72 errors,
+    # `TypeError: 'NoneType' object is not callable`). Declaring it here (no
+    # marker) makes macOS dev match Linux/CI. No-op on Linux (already present).
+    "dbus-fast>=5.0.16",
 ]
 
 [project.urls]

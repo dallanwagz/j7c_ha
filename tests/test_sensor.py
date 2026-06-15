@@ -240,7 +240,7 @@ async def test_entity_state_propagation_through_ha_pipeline(
         duration_s=10,
     )
     coordinator._last_reading = reading
-    coordinator._last_seen = datetime.now(timezone.utc)
+    coordinator._last_frame_at = datetime.now(timezone.utc)
     snapshot = AtorchBleData(reading=reading, power_w=5.0)
     coordinator.data = snapshot
     coordinator.async_update_listeners()
@@ -251,10 +251,10 @@ async def test_entity_state_propagation_through_ha_pipeline(
     power_state = hass.states.get("sensor.atorch_j7_c_eeff_power")
     assert power_state.state == "5.0"
 
-    # Backdate last_seen well past the freshness window. Re-publishing
+    # Backdate last_frame_at well past the freshness window. Re-publishing
     # the snapshot drives a fresh write_ha_state cycle through the
     # listener pipeline, and the availability flips to unavailable.
-    coordinator._last_seen = datetime.now(timezone.utc) - timedelta(hours=1)
+    coordinator._last_frame_at = datetime.now(timezone.utc) - timedelta(hours=1)
     coordinator.data = snapshot
     coordinator.async_update_listeners()
     await hass.async_block_till_done()

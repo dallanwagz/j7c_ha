@@ -43,7 +43,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: AtorchBleConfigEntry) ->
         )
 
     coordinator = AtorchBleCoordinator(hass, entry)
-    await coordinator.async_start()
+    await coordinator.async_start_runner()
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
     # Initial device-registry registration (per ticket #15). Runtime model

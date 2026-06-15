@@ -25,6 +25,11 @@ rules:
       decision (see UPSTREAM.md). Re-targeted from 0.2.0 to the 0.3.0
       Core-readiness milestone. Not blocking for HACS custom-component
       distribution.
+
+      NOTE: brands is a BRONZE-tier rule, so until it is done the integration
+      cannot claim the Bronze tier — and HA Core requires new integrations to
+      reach at least Bronze. This is therefore the single critical-path
+      blocker for Core merge; everything else is already green.
   common-modules: done
   config-flow-test-coverage:
     status: done
