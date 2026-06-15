@@ -11,7 +11,7 @@ license = { file = "LICENSE" }
 requires-python = ">=3.12"
 authors = [{ name = "Dallan Wagner" }]
 dependencies = [
-    "atorch-ble==0.1.0",
+    "atorch-ble==0.1.1",
 ]
 
 [project.optional-dependencies]
